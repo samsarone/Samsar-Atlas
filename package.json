@@ -2,6 +2,15 @@
   "name": "samsar-atlas",
   "version": "0.1.0",
   "description": "Samsar Atlas A2A-compliant wrapper for Samsar Processor v2 routes.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samsarone/Samsar-Atlas.git"
+  },
+  "bugs": {
+    "url": "https://github.com/samsarone/Samsar-Atlas/issues"
+  },
+  "homepage": "https://github.com/samsarone/Samsar-Atlas#readme",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {

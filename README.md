@@ -1,19 +1,31 @@
 # Samsar Atlas
 
-Samsar Atlas is a standalone A2A 1.0 wrapper for Samsar Processor v2 routes.
+Samsar Atlas is an open-source A2A 1.0 gateway for Samsar. It exposes Samsar video, billing, login, and account workflows as a standards-based agent endpoint that other agents can discover and call.
 
-The service exposes an A2A Agent Card and protocol endpoints, then calls Samsar Processor through `samsar-js` v2 methods. It does not call `samsar_processor` routes directly.
-The deployment harness is Cloud Run only.
+Atlas is designed for a simple operating model: deploy one stateless container to Cloud Run, publish the Agent Card, and let A2A clients invoke Samsar through a clean protocol boundary.
 
-## Endpoints
+## What Atlas Provides
 
-- `GET /.well-known/agent-card.json`
-- `POST /a2a` for JSON-RPC A2A methods
-- `POST /message:send` HTTP+JSON alias
-- `GET /tasks/:id`
-- `GET /tasks`
-- `POST /tasks/:id:cancel`
-- `GET /health`
+- **A2A 1.0 compatibility** through JSON-RPC and HTTP+JSON interfaces.
+- **Agent Card discovery** at `/.well-known/agent-card.json`.
+- **Samsar v2 coverage** for media generation, editing, billing, login, app keys, user credits, usage logs, and external-user registration.
+- **Cloud Run deployment** with a small container footprint and no Kubernetes dependency.
+- **SDK-based integration** through `samsar-js`; Atlas does not call Samsar Processor internals directly.
+
+## Protocol Surface
+
+Atlas exposes these public endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /.well-known/agent-card.json` | A2A Agent Card discovery. |
+| `POST /a2a` | JSON-RPC A2A endpoint. |
+| `POST /message:send` | HTTP+JSON alias for sending an A2A message. |
+| `GET /tasks` | List visible Samsar tasks. |
+| `GET /tasks/:id` | Fetch task status. |
+| `POST /tasks/:id:cancel` | Cancel a task. |
+| `POST /tasks/:id/cancel` | Cancel alias for clients that prefer slash routes. |
+| `GET /health` | Runtime health check. |
 
 Supported JSON-RPC methods:
 
@@ -23,9 +35,13 @@ Supported JSON-RPC methods:
 - `CancelTask`
 - `GetExtendedAgentCard`
 
-Streaming and push notifications are intentionally not advertised yet. Use `SendMessage` and poll with `GetTask`.
+Streaming and push notifications are not advertised yet. Use `SendMessage` and poll with `GetTask`.
 
-Supported video skills:
+## Skills
+
+Atlas uses `metadata.skill` to route an A2A message to the corresponding Samsar operation.
+
+Media skills:
 
 - `text_to_video`
 - `image_list_to_video`
@@ -39,7 +55,7 @@ Supported video skills:
 - `update_footer_image`
 - `join_videos`
 
-Supported billing, login, and account skills:
+Billing, login, and account skills:
 
 - `get_credits`
 - `create_credits_recharge`
@@ -57,24 +73,48 @@ Supported billing, login, and account skills:
 - `get_user_payment_status`
 - `create_external_user`
 
+Synchronous skills return a completed A2A task immediately, with the Samsar response in the `samsar-response` data artifact. Long-running media skills return a task id that can be polled.
+
+## Quickstart
+
+From the workspace root:
+
+```bash
+npm --prefix samsar-js install
+npm --prefix samsar-js run build
+npm --prefix Samsar-Atlas install
+npm --prefix Samsar-Atlas run dev
+```
+
+The local service starts on `PORT`, defaulting to `8080`.
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/.well-known/agent-card.json
+```
+
 ## Configuration
 
 Copy `.env.example` and set:
 
-- `PUBLIC_BASE_URL`: public URL for this wrapper. Used in the Agent Card.
-- `SAMSAR_API_BASE_URL`: Samsar Processor base URL, for example `https://api.samsar.one` or `http://samsar-processor:3002`.
-- Optional service credentials: `SAMSAR_API_KEY`, `SAMSAR_APP_KEY`, `SAMSAR_APP_SECRET`, `SAMSAR_EXTERNAL_USER_API_KEY`.
+| Variable | Required | Description |
+| --- | --- | --- |
+| `PUBLIC_BASE_URL` | Yes | Public URL used in the Agent Card. |
+| `SAMSAR_API_BASE_URL` | Yes | Samsar API base URL, for example `https://api.samsar.one`. |
+| `SAMSAR_API_KEY` | No | Service API key. If omitted, Atlas forwards caller auth headers. |
+| `SAMSAR_APP_KEY` | No | Optional Samsar APP_KEY credential. |
+| `SAMSAR_APP_SECRET` | No | Secret paired with `SAMSAR_APP_KEY`. |
+| `SAMSAR_EXTERNAL_USER_API_KEY` | No | Optional external-user API key. |
+| `SAMSAR_REQUEST_TIMEOUT_MS` | No | Upstream request timeout. Defaults to `60000`. |
+| `JSON_BODY_LIMIT` | No | JSON body limit. Defaults to `25mb`. |
+| `AGENT_CARD_DOCUMENTATION_URL` | No | Documentation URL included in the Agent Card. |
 
-If service credentials are not configured, the wrapper forwards caller auth headers to `samsar-js`.
-
-## Message Format
-
-Clients must identify the Samsar skill explicitly through `params.metadata.skill`, message metadata, or a data part.
+## Example: Image List to Video
 
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "req-1",
+  "id": "video-1",
   "method": "SendMessage",
   "params": {
     "metadata": {
@@ -82,7 +122,7 @@ Clients must identify the Samsar skill explicitly through `params.metadata.skill
     },
     "message": {
       "role": "ROLE_USER",
-      "messageId": "msg-1",
+      "messageId": "msg-video-1",
       "parts": [
         {
           "text": "Create a product launch ad."
@@ -90,7 +130,10 @@ Clients must identify the Samsar skill explicitly through `params.metadata.skill
         {
           "data": {
             "input": {
-              "image_urls": ["https://cdn.example.com/a.png", "https://cdn.example.com/b.png"],
+              "image_urls": [
+                "https://cdn.example.com/a.png",
+                "https://cdn.example.com/b.png"
+              ],
               "video_model": "RUNWAYML",
               "aspect_ratio": "16:9"
             }
@@ -102,12 +145,12 @@ Clients must identify the Samsar skill explicitly through `params.metadata.skill
 }
 ```
 
-The response is `{ "task": { ... } }`; the task `id` is the Samsar `request_id` / `session_id`. Poll:
+Poll the returned task:
 
 ```json
 {
   "jsonrpc": "2.0",
-  "id": "req-2",
+  "id": "status-1",
   "method": "GetTask",
   "params": {
     "id": "<task-id>"
@@ -115,9 +158,7 @@ The response is `{ "task": { ... } }`; the task `id` is the Samsar `request_id` 
 }
 ```
 
-Synchronous billing/login skills return a completed A2A task immediately, with the Samsar response in the `samsar-response` data artifact.
-
-Example billing request:
+## Example: Billing
 
 ```json
 {
@@ -145,7 +186,7 @@ Example billing request:
 }
 ```
 
-Example login request:
+## Example: Login Token
 
 ```json
 {
@@ -173,26 +214,15 @@ Example login request:
 }
 ```
 
-## Local Development
-
-From the workspace root:
-
-```bash
-npm --prefix samsar-js install
-npm --prefix samsar-js run build
-npm --prefix Samsar-Atlas install
-npm --prefix Samsar-Atlas run dev
-```
-
 ## Docker
 
-Build from the workspace root, not from `Samsar-Atlas`, so the local `samsar-js` dependency is available:
+Build from the workspace root so Docker can include the local `samsar-js` package:
 
 ```bash
 docker build -f Samsar-Atlas/Dockerfile -t samsar-atlas .
 ```
 
-Run:
+Run locally:
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -202,21 +232,75 @@ docker run --rm -p 8080:8080 \
   samsar-atlas
 ```
 
-## Cloud Run
+## Deploy to Cloud Run
 
-Build and push an image from the workspace root, so Docker can include the local `samsar-js` package:
+Recommended APAC region:
 
 ```bash
-docker build -f Samsar-Atlas/Dockerfile \
-  -t us-docker.pkg.dev/PROJECT_ID/REPOSITORY/samsar-atlas:latest .
-
-docker push us-docker.pkg.dev/PROJECT_ID/REPOSITORY/samsar-atlas:latest
-
-gcloud run deploy samsar-atlas \
-  --image us-docker.pkg.dev/PROJECT_ID/REPOSITORY/samsar-atlas:latest \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars PUBLIC_BASE_URL=https://YOUR_CLOUD_RUN_URL,SAMSAR_API_BASE_URL=https://api.samsar.one
+export PROJECT_ID="your-gcp-project-id"
+export REGION="asia-southeast1"
+export REPO="samsar-agents"
+export SERVICE="samsar-atlas"
+export IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$SERVICE:latest"
 ```
 
-For production, store Samsar credentials in Secret Manager and mount them as environment variables.
+Build and push:
+
+```bash
+gcloud auth login
+gcloud config set project "$PROJECT_ID"
+gcloud auth configure-docker "$REGION-docker.pkg.dev"
+
+gcloud artifacts repositories create "$REPO" \
+  --repository-format=docker \
+  --location="$REGION" \
+  --description="Samsar Atlas container images"
+
+docker build -f Samsar-Atlas/Dockerfile -t "$IMAGE" .
+docker push "$IMAGE"
+```
+
+Deploy:
+
+```bash
+gcloud run deploy "$SERVICE" \
+  --image "$IMAGE" \
+  --region "$REGION" \
+  --platform managed \
+  --allow-unauthenticated \
+  --port 8080 \
+  --cpu 1 \
+  --memory 512Mi \
+  --concurrency 80 \
+  --timeout 300 \
+  --min-instances 1 \
+  --max-instances 5 \
+  --set-env-vars PUBLIC_BASE_URL=https://placeholder,SAMSAR_API_BASE_URL=https://api.samsar.one,SAMSAR_REQUEST_TIMEOUT_MS=60000,JSON_BODY_LIMIT=25mb
+```
+
+After deployment, update `PUBLIC_BASE_URL` to the assigned Cloud Run URL:
+
+```bash
+export SERVICE_URL="$(gcloud run services describe "$SERVICE" \
+  --region "$REGION" \
+  --format='value(status.url)')"
+
+gcloud run services update "$SERVICE" \
+  --region "$REGION" \
+  --update-env-vars PUBLIC_BASE_URL="$SERVICE_URL"
+```
+
+## Security
+
+Atlas can run in two modes:
+
+- **Forwarded credentials:** callers send Samsar auth headers and Atlas forwards them upstream.
+- **Service credentials:** Atlas is configured with a Samsar API key or app key and acts as the service principal.
+
+For public demos, prefer forwarded credentials or a limited test key. If `--allow-unauthenticated` is enabled and `SAMSAR_API_KEY` is configured, public callers may consume that key's credits.
+
+For production, store credentials in Secret Manager and mount them as environment variables.
+
+## License
+
+Samsar Atlas is released under the [MIT License](LICENSE).
