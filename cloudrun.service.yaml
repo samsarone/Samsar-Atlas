@@ -1,0 +1,26 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: samsar-atlas
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "20"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: us-docker.pkg.dev/PROJECT_ID/REPOSITORY/samsar-atlas:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: PUBLIC_BASE_URL
+              value: "https://samsar-atlas.example.com"
+            - name: SAMSAR_API_BASE_URL
+              value: "https://api.samsar.one"
+            - name: SAMSAR_REQUEST_TIMEOUT_MS
+              value: "60000"
