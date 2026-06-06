@@ -1,6 +1,6 @@
 # Samsar Atlas
 
-Samsar Atlas is a Cloud Run-ready A2A gateway for Samsar video generation. It lets external agents register, buy credits, authenticate with Atlas-issued credentials, and call Samsar video workflows without receiving the platform `SAMSAR_API_KEY`.
+Samsar Atlas is a Cloud Run-ready A2A gateway for Samsar video generation. It lets external agents register, buy credits, authenticate with Atlas-issued credentials, and start Samsar video workflows through a standard A2A endpoint.
 
 Atlas is built for enterprise agent deployments:
 
@@ -9,7 +9,6 @@ Atlas is built for enterprise agent deployments:
 - Per-agent reference ids, cryptographic agent hashes, and secrets
 - Firestore-backed sub-account state, billing counters, and request accounting
 - Cloud Run deployment with Secret Manager for the Samsar platform API key
-- `samsar-js` as the only Samsar integration layer
 
 ## Integration Flow
 
@@ -24,11 +23,9 @@ The `referenceId` is a stable public handle. It is not a credential. The `agentS
 ## Requirements
 
 - Node.js 20
-- A Samsar platform API key
+- A Samsar API key for the Atlas backend service
 - Google Cloud project with Cloud Run, Cloud Build, Artifact Registry, Secret Manager, and Firestore
 - A user-managed Cloud Run service account with access to Secret Manager and Firestore
-
-Only `SAMSAR_API_KEY` is required from Samsar. Atlas does not require `SAMSAR_APP_KEY`, `SAMSAR_APP_SECRET`, or `SAMSAR_EXTERNAL_USER_API_KEY`.
 
 ## Configuration
 
@@ -38,7 +35,7 @@ Copy `.env.example` for local development.
 | --- | --- | --- |
 | `PUBLIC_BASE_URL` | Production | Public Atlas URL used in the Agent Card. Defaults to localhost for development. |
 | `SAMSAR_API_BASE_URL` | No | Samsar API base URL. Defaults to `https://api.samsar.one`. |
-| `SAMSAR_API_KEY` | Yes | Platform key used by Atlas for underlying `samsar-js` requests. |
+| `SAMSAR_API_KEY` | Yes | Backend Samsar API key read by Atlas at runtime. |
 | `ATLAS_STATE_BACKEND` | No | `firestore` for production, `memory` for local development. |
 | `GOOGLE_CLOUD_PROJECT` | Firestore | Google Cloud project used by Firestore. Usually inferred on Cloud Run. |
 | `FIRESTORE_AGENT_COLLECTION` | No | Firestore collection for agent state. Defaults to `samsar_atlas_agents`. |
@@ -77,7 +74,7 @@ SAMSAR_API_KEY="$SAMSAR_API_KEY" \
 ./scripts/deploy_google_cloud_run.sh
 ```
 
-For push-to-deploy, connect this GitHub repository to Cloud Build and use `cloudbuild.yaml`. The build file deploys the container to Cloud Run and reads the platform key from Secret Manager:
+For push-to-deploy, connect this GitHub repository to Cloud Build and use `cloudbuild.yaml`. The build file deploys the container to Cloud Run and reads the backend Samsar key from Secret Manager:
 
 ```bash
 gcloud builds triggers create github \
@@ -296,11 +293,11 @@ Supported Atlas-managed skills:
 - `create_credits_recharge`
 - `get_payment_status`
 
-Atlas injects the authenticated agent sub-account into every Samsar request. A2A callers cannot override `external_user`.
+Atlas assigns each request to the authenticated agent sub-account.
 
 ## Security Model
 
-Atlas runs as the Samsar service principal. Connecting agents authenticate to Atlas with Atlas-issued secrets. In production:
+Atlas uses one backend Samsar credential and issues separate Atlas credentials to connecting agents. In production:
 
 - Store `SAMSAR_API_KEY` in Secret Manager.
 - Run Cloud Run as a user-managed service account.
