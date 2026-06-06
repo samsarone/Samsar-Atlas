@@ -50,7 +50,7 @@ export function buildAgentCard(config: AppConfig): AgentCard {
       {
         id: "text_to_video",
         name: "Text to Video",
-        description: "Create a Samsar video generation request from a text prompt.",
+        description: "Create a Samsar video generation request from a prompt and duration. Atlas supplies the image, video, music, and TTS settings.",
         tags: ["video", "generation", "text-to-video"],
         examples: ["Create a 20 second launch teaser for a travel app."],
         inputModes: ["text/plain", "application/json"],
@@ -59,7 +59,7 @@ export function buildAgentCard(config: AppConfig): AgentCard {
       {
         id: "image_list_to_video",
         name: "Image List to Video",
-        description: "Create a Samsar video generation request from ordered image URLs or image file parts.",
+        description: "Create a Samsar video generation request from ordered images, optional prompt, and optional metadata. Atlas supplies the model, music, and TTS settings.",
         tags: ["video", "generation", "image-to-video", "storyboard"],
         examples: ["Turn these product images into a narrated ad."],
         inputModes: ["application/json", "image/png", "image/jpeg", "image/webp"],
@@ -68,7 +68,7 @@ export function buildAgentCard(config: AppConfig): AgentCard {
       {
         id: "step_text_to_video",
         name: "Step Text to Video",
-        description: "Create a step-controlled text-to-video request.",
+        description: "Create a step-controlled text-to-video request from a prompt and duration.",
         tags: ["video", "step", "generation"],
         inputModes: ["text/plain", "application/json"],
         outputModes: ["application/json", "video/mp4", "image/png", "audio/mpeg"],
@@ -76,7 +76,7 @@ export function buildAgentCard(config: AppConfig): AgentCard {
       {
         id: "step_image_to_video",
         name: "Step Image to Video",
-        description: "Create a step-controlled image-to-video request.",
+        description: "Create a step-controlled image-to-video request from ordered images, optional prompt, and optional metadata.",
         tags: ["video", "step", "image-to-video"],
         inputModes: ["application/json", "image/png", "image/jpeg", "image/webp"],
         outputModes: ["application/json", "video/mp4", "image/png", "audio/mpeg"],

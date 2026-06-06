@@ -121,6 +121,12 @@ const MANAGED_SUBACCOUNT_DISABLED_SKILLS = new Set([
   "get_user_payment_status",
 ]);
 
+const ATLAS_A2A_IMAGE_MODEL = "NANOBANANAPRO";
+const ATLAS_A2A_DEFAULT_VIDEO_MODEL = "VEO3.1I2VFAST";
+const ATLAS_A2A_VIDEO_MODEL = "VEO3.1I2V";
+const ATLAS_A2A_BACKINGTRACK_MODEL = "LYRIA3";
+const ATLAS_A2A_TTS_MODEL = "GOOGLE";
+
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -140,6 +146,90 @@ function getArray(value: unknown): unknown[] {
 function getNumber(value: unknown): number | undefined {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeAtlasA2AVideoModel(input: JsonObject): string {
+  const raw =
+    getString(input.video_model) ||
+    getString(input.videoModel) ||
+    getString(input.model);
+  if (!raw) {
+    return ATLAS_A2A_DEFAULT_VIDEO_MODEL;
+  }
+
+  const compact = raw.toUpperCase().replace(/[\s_.-]/g, "");
+  if (compact === "VEO31" || compact === "VEO31I2V") {
+    return ATLAS_A2A_VIDEO_MODEL;
+  }
+  if (compact === "VEO31FAST" || compact === "VEO31I2VFAST") {
+    return ATLAS_A2A_DEFAULT_VIDEO_MODEL;
+  }
+
+  throw new Error("video_model must be VEO3.1FAST or VEO3.1 for Atlas A2A video generation.");
+}
+
+function buildAtlasA2AVideoDefaults(input: JsonObject): JsonObject {
+  return {
+    image_model: ATLAS_A2A_IMAGE_MODEL,
+    video_model: normalizeAtlasA2AVideoModel(input),
+    backingtrack_model: ATLAS_A2A_BACKINGTRACK_MODEL,
+    tts_model: ATLAS_A2A_TTS_MODEL,
+  };
+}
+
+function buildAtlasA2ATextToVideoInput(input: JsonObject): JsonObject {
+  const prompt = getString(input.prompt);
+  if (!prompt) {
+    throw new Error("prompt is required for text_to_video.");
+  }
+
+  const duration = getNumber(input.duration);
+  if (!Number.isFinite(duration)) {
+    throw new Error("duration is required for text_to_video.");
+  }
+
+  return compactObject({
+    prompt,
+    duration,
+    ...buildAtlasA2AVideoDefaults(input),
+  });
+}
+
+function getImageListInput(input: JsonObject): unknown[] {
+  const imageUrls = getArray(input.image_urls);
+  if (imageUrls.length) {
+    return imageUrls;
+  }
+  const imageUrlsAlias = getArray(input.imageUrls);
+  if (imageUrlsAlias.length) {
+    return imageUrlsAlias;
+  }
+  const images = getArray(input.images);
+  if (images.length) {
+    return images;
+  }
+  const imageList = getArray(input.image_list);
+  if (imageList.length) {
+    return imageList;
+  }
+  return getArray(input.imageList);
+}
+
+function buildAtlasA2AImageListToVideoInput(input: JsonObject): JsonObject {
+  const imageUrls = getImageListInput(input);
+  if (!imageUrls.length) {
+    throw new Error("image_urls is required for image_list_to_video.");
+  }
+
+  const prompt = getString(input.prompt);
+  const metadata = getObject(input.metadata);
+
+  return compactObject({
+    image_urls: imageUrls,
+    ...(prompt ? { prompt } : {}),
+    ...(Object.keys(metadata).length ? { metadata } : {}),
+    ...buildAtlasA2AVideoDefaults(input),
+  });
 }
 
 function hasPartKind(part: JsonObject, kind: string): boolean {
@@ -558,13 +648,13 @@ async function executeSkill(
 
   switch (skill) {
     case "text_to_video":
-      return client.createV2VideoFromText(samsarInput as never, options) as Promise<SamsarResult<unknown>>;
+      return client.createV2VideoFromText(buildAtlasA2ATextToVideoInput(samsarInput) as never, options) as Promise<SamsarResult<unknown>>;
     case "image_list_to_video":
-      return client.createV2VideoFromImageList(samsarInput as never, options) as Promise<SamsarResult<unknown>>;
+      return client.createV2VideoFromImageList(buildAtlasA2AImageListToVideoInput(samsarInput) as never, options) as Promise<SamsarResult<unknown>>;
     case "step_text_to_video":
-      return client.createV2StepVideoFromText(samsarInput as never, options) as Promise<SamsarResult<unknown>>;
+      return client.createV2StepVideoFromText(buildAtlasA2ATextToVideoInput(samsarInput) as never, options) as Promise<SamsarResult<unknown>>;
     case "step_image_to_video":
-      return client.createV2StepVideoFromImage(samsarInput as never, options) as Promise<SamsarResult<unknown>>;
+      return client.createV2StepVideoFromImage(buildAtlasA2AImageListToVideoInput(samsarInput) as never, options) as Promise<SamsarResult<unknown>>;
     case "translate_video":
       return client.translateV2Video(samsarInput as never, options) as Promise<SamsarResult<unknown>>;
     case "clone_video":
