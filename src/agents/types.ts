@@ -1,5 +1,5 @@
 import type { V2ExternalUserIdentity } from "samsar-js";
-import type { JsonObject } from "../a2a/types.js";
+import type { A2ATaskState, JsonObject } from "../a2a/types.js";
 
 export type AtlasAgentStatus = "pending_payment" | "active" | "revoked";
 export type AtlasAccountingEventType = "request" | "charge" | "payment_created" | "payment_succeeded" | "payment_status";
@@ -43,6 +43,23 @@ export interface AtlasAccountingEvent {
   createdAt: string;
 }
 
+export interface AtlasTaskRecord {
+  id: string;
+  agentId: string;
+  taskId: string;
+  contextId: string;
+  samsarRequestId: string;
+  samsarSessionId: string;
+  state: A2ATaskState;
+  samsarStatus?: string;
+  creditsCharged?: number;
+  lastAction?: string;
+  latestTask?: JsonObject;
+  metadata?: JsonObject;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PublicAtlasAgent {
   id: string;
   agentHash: string;
@@ -74,6 +91,9 @@ export interface AtlasAgentStore {
   getAgentBySecretHash(secretHash: string): Promise<AtlasAgentRecord | undefined>;
   updateAgent(agentId: string, patch: Partial<AtlasAgentRecord>): Promise<void>;
   recordAccountingEvent(event: AtlasAccountingEvent): Promise<boolean>;
+  upsertTaskRecord(task: AtlasTaskRecord): Promise<void>;
+  getTaskRecord(agentId: string, taskId: string): Promise<AtlasTaskRecord | undefined>;
+  listTaskRecords(agentId: string, limit?: number): Promise<AtlasTaskRecord[]>;
 }
 
 export function toPublicAgent(agent: AtlasAgentRecord): PublicAtlasAgent {

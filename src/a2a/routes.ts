@@ -7,9 +7,9 @@ import { recordTaskAccounting } from "../agents/accounting.js";
 import type { AtlasAgentRecord, AtlasAgentStore } from "../agents/types.js";
 import { buildSamsarRequestOptions } from "../samsar/client.js";
 import { buildAgentCard } from "./agent-card.js";
-import { cancelTask, getTask, listTasks, sendMessage } from "./adapter.js";
+import { cancelTask, getTask, sendMessage } from "./adapter.js";
 import { asParams, errorToJsonRpc, isJsonRpcRequest, jsonRpcError, jsonRpcSuccess } from "./json-rpc.js";
-import type { JsonObject, JsonRpcRequest, MessageSendParams, TaskQueryParams } from "./types.js";
+import type { A2ATask, JsonObject, JsonRpcRequest, MessageSendParams, TaskQueryParams } from "./types.js";
 
 const SUPPORTED_A2A_VERSIONS = new Set(["1.0", "1.0.0"]);
 
@@ -77,21 +77,19 @@ async function dispatchJsonRpc(client: SamsarClient, store: AtlasAgentStore, req
     case "GetTask":
       {
         const agent = await authenticateAtlasAgent(req, store);
-        const task = await getTask(client, params as TaskQueryParams, mergeOptions(req, agent));
-        await recordTaskAccounting(store, agent, task, "get_task");
+        const task = await getMappedTask(client, store, req, agent, params as TaskQueryParams);
         return jsonRpcSuccess(rpc.id, task);
       }
     case "CancelTask":
       {
         const agent = await authenticateAtlasAgent(req, store);
-        const task = await cancelTask(client, params as TaskQueryParams, mergeOptions(req, agent));
-        await recordTaskAccounting(store, agent, task, "cancel_task");
+        const task = await cancelMappedTask(client, store, req, agent, params as TaskQueryParams);
         return jsonRpcSuccess(rpc.id, task);
       }
     case "ListTasks":
       {
         const agent = await authenticateAtlasAgent(req, store);
-        return jsonRpcSuccess(rpc.id, await listTasks(client, mergeOptions(req, agent)));
+        return jsonRpcSuccess(rpc.id, await listStoredTasks(store, agent));
       }
     default:
       return jsonRpcError(rpc.id, -32601, `Unsupported A2A method: ${rpc.method}`);
@@ -101,6 +99,83 @@ async function dispatchJsonRpc(client: SamsarClient, store: AtlasAgentStore, req
 function taskIdFromRequest(req: Request): string | undefined {
   const regexParam = Array.isArray(req.params) ? undefined : req.params[0];
   return req.params.id || regexParam || (req.query.id as string | undefined);
+}
+
+function taskIdFromParams(params: TaskQueryParams): string | undefined {
+  return firstValue(params.id) || firstValue(params.taskId);
+}
+
+function taskListLimit(req: Request): number {
+  const parsed = Number(firstValue(req.query.limit) || firstValue(req.query.pageSize) || firstValue(req.query.page_size));
+  if (!Number.isFinite(parsed)) {
+    return 50;
+  }
+  return Math.max(1, Math.min(100, Math.floor(parsed)));
+}
+
+function taskFromStoredSnapshot(record: {
+  latestTask?: JsonObject;
+  taskId: string;
+  contextId: string;
+  state: A2ATask["status"]["state"];
+  updatedAt: string;
+  metadata?: JsonObject;
+}): A2ATask {
+  if (record.latestTask && typeof record.latestTask === "object") {
+    return record.latestTask as unknown as A2ATask;
+  }
+
+  return {
+    id: record.taskId,
+    contextId: record.contextId,
+    status: {
+      state: record.state,
+      timestamp: record.updatedAt,
+    },
+    metadata: record.metadata,
+  };
+}
+
+async function getMappedTask(
+  client: SamsarClient,
+  store: AtlasAgentStore,
+  req: Request,
+  agent: AtlasAgentRecord,
+  params: TaskQueryParams,
+): Promise<A2ATask> {
+  const requestedTaskId = taskIdFromParams(params);
+  const taskRecord = requestedTaskId ? await store.getTaskRecord(agent.id, requestedTaskId) : undefined;
+  const upstreamTaskId = taskRecord?.samsarRequestId || taskRecord?.samsarSessionId || requestedTaskId;
+  const task = await getTask(client, { ...params, id: upstreamTaskId }, mergeOptions(req, agent));
+  await recordTaskAccounting(store, agent, task, "get_task");
+  return task;
+}
+
+async function cancelMappedTask(
+  client: SamsarClient,
+  store: AtlasAgentStore,
+  req: Request,
+  agent: AtlasAgentRecord,
+  params: TaskQueryParams,
+): Promise<A2ATask> {
+  const requestedTaskId = taskIdFromParams(params);
+  const taskRecord = requestedTaskId ? await store.getTaskRecord(agent.id, requestedTaskId) : undefined;
+  const upstreamTaskId = taskRecord?.samsarSessionId || taskRecord?.samsarRequestId || requestedTaskId;
+  const task = await cancelTask(client, { ...params, id: upstreamTaskId }, mergeOptions(req, agent));
+  await recordTaskAccounting(store, agent, task, "cancel_task");
+  return task;
+}
+
+async function listStoredTasks(store: AtlasAgentStore, agent: AtlasAgentRecord, limit = 50) {
+  const records = await store.listTaskRecords(agent.id, limit);
+  const tasks = records.map(taskFromStoredSnapshot);
+
+  return {
+    tasks,
+    nextPageToken: "",
+    pageSize: tasks.length,
+    totalSize: tasks.length,
+  };
 }
 
 export function createA2ARouter(config: AppConfig, client: SamsarClient, store: AtlasAgentStore): Router {
@@ -167,7 +242,7 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient, store: 
 
     try {
       const agent = await authenticateAtlasAgent(req, store);
-      return res.status(200).type("application/a2a+json").json(await listTasks(client, mergeOptions(req, agent)));
+      return res.status(200).type("application/a2a+json").json(await listStoredTasks(store, agent, taskListLimit(req)));
     } catch (error) {
       return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
     }
@@ -182,8 +257,7 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient, store: 
     try {
       const agent = await authenticateAtlasAgent(req, store);
       const id = taskIdFromRequest(req);
-      const task = await getTask(client, { id }, mergeOptions(req, agent));
-      await recordTaskAccounting(store, agent, task, "get_task");
+      const task = await getMappedTask(client, store, req, agent, { id });
       return res.status(200).type("application/a2a+json").json(task);
     } catch (error) {
       return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
@@ -199,8 +273,7 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient, store: 
     try {
       const agent = await authenticateAtlasAgent(req, store);
       const id = taskIdFromRequest(req);
-      const task = await cancelTask(client, { id }, mergeOptions(req, agent));
-      await recordTaskAccounting(store, agent, task, "cancel_task");
+      const task = await cancelMappedTask(client, store, req, agent, { id });
       return res.status(200).type("application/a2a+json").json(task);
     } catch (error) {
       return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
@@ -216,8 +289,7 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient, store: 
     try {
       const agent = await authenticateAtlasAgent(req, store);
       const id = taskIdFromRequest(req);
-      const task = await cancelTask(client, { id }, mergeOptions(req, agent));
-      await recordTaskAccounting(store, agent, task, "cancel_task");
+      const task = await cancelMappedTask(client, store, req, agent, { id });
       return res.status(200).type("application/a2a+json").json(task);
     } catch (error) {
       return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));

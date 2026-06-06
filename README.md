@@ -272,6 +272,16 @@ curl -sS "$ATLAS_URL/tasks/<task-id>" \
   -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET"
 ```
 
+Atlas stores submitted task ids, Samsar request ids, and Samsar session ids in the authenticated agent's state record. `GetTask`, REST task polling, and cancel requests can use any of those ids. To list the tasks Atlas has recorded for the current agent:
+
+```bash
+curl -sS "$ATLAS_URL/tasks?limit=25" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET"
+```
+
+The initial submit response may show `creditsCharged: 0` while the render is queued. Poll the task to see the latest Samsar status and any final charge metadata returned by Samsar.
+
 ## Protocol Reference
 
 Public endpoints:

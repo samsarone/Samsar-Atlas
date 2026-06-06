@@ -80,11 +80,36 @@ export async function recordTaskAccounting(
     getString(payload.session_id) ||
     getString(payload.sessionId) ||
     task.id;
+  const samsarSessionId =
+    getString(metadata.samsarSessionId) ||
+    getString(payload.session_id) ||
+    getString(payload.sessionId) ||
+    getString(payload.sessionID) ||
+    samsarRequestId;
+  const creditsCharged = getNumber(metadata.creditsCharged) ?? getNumber(payload.creditsCharged) ?? getNumber(payload.credits_charged);
   const baseMetadata = {
     action,
     taskState: task.status.state,
     samsarStatus: getString(metadata.samsarStatus) || getString(payload.status),
   };
+  const now = new Date().toISOString();
+
+  await store.upsertTaskRecord({
+    id: task.id,
+    agentId: agent.id,
+    taskId: task.id,
+    contextId: task.contextId,
+    samsarRequestId,
+    samsarSessionId,
+    state: task.status.state,
+    samsarStatus: baseMetadata.samsarStatus,
+    creditsCharged,
+    lastAction: action,
+    latestTask: task as unknown as JsonObject,
+    metadata: baseMetadata,
+    createdAt: now,
+    updatedAt: now,
+  });
 
   if (action === "send_message") {
     await recordEvent(store, {
@@ -98,7 +123,6 @@ export async function recordTaskAccounting(
     });
   }
 
-  const creditsCharged = getNumber(metadata.creditsCharged) ?? getNumber(payload.creditsCharged) ?? getNumber(payload.credits_charged);
   if (creditsCharged && creditsCharged > 0) {
     await recordEvent(store, {
       id: `charge:${agent.id}:${samsarRequestId}:${creditsCharged}`,
