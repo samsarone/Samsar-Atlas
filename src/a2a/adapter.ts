@@ -185,6 +185,10 @@ function getNumber(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function getBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function normalizeAtlasA2AVideoModel(input: JsonObject): string {
   const raw =
     getString(input.video_model) ||
@@ -216,6 +220,25 @@ function buildAtlasA2AVideoDefaults(input: JsonObject): JsonObject {
   };
 }
 
+function buildAtlasA2AOutroCtaOptions(input: JsonObject): JsonObject {
+  return compactObject({
+    generate_outro_image: getBoolean(input.generate_outro_image ?? input.generateOutroImage),
+    cta_url: getString(input.cta_url) || getString(input.ctaUrl),
+    cta_text_top:
+      getString(input.cta_text_top) ||
+      getString(input.ctaTextTop) ||
+      getString(input.cta_top_text) ||
+      getString(input.ctaTopText) ||
+      getString(input.cta_header_text) ||
+      getString(input.ctaHeaderText),
+    cta_text_bottom:
+      getString(input.cta_text_bottom) ||
+      getString(input.ctaTextBottom) ||
+      getString(input.cta_bottom_text) ||
+      getString(input.ctaBottomText),
+  });
+}
+
 function buildAtlasA2ATextToVideoInput(input: JsonObject): JsonObject {
   const prompt = getString(input.prompt);
   if (!prompt) {
@@ -231,6 +254,7 @@ function buildAtlasA2ATextToVideoInput(input: JsonObject): JsonObject {
     prompt,
     duration,
     ...buildAtlasA2AVideoDefaults(input),
+    ...buildAtlasA2AOutroCtaOptions(input),
   });
 }
 
@@ -268,6 +292,7 @@ function buildAtlasA2AImageListToVideoInput(input: JsonObject): JsonObject {
     ...(prompt ? { prompt } : {}),
     ...(Object.keys(metadata).length ? { metadata } : {}),
     ...buildAtlasA2AVideoDefaults(input),
+    ...buildAtlasA2AOutroCtaOptions(input),
   });
 }
 
