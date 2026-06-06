@@ -9,7 +9,7 @@ coverage/
 .env
 .env.*
 !.env.example
-agents/test_agent_samsar_one.json
+/agents/
 
 # Logs
 *.log
