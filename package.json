@@ -22,7 +22,7 @@
   "dependencies": {
     "@google-cloud/firestore": "^8.6.0",
     "express": "^4.19.2",
-    "samsar-js": "^0.48.32"
+    "samsar-js": "^0.48.33"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
