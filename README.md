@@ -1,37 +1,273 @@
 # Samsar Atlas
 
-Samsar Atlas is an open-source A2A 1.0 gateway for Samsar. It exposes Samsar video generation and Atlas-managed agent billing as a standards-based endpoint that other agents can discover and call.
+Samsar Atlas is a Cloud Run-ready A2A gateway for Samsar video generation. It lets external agents register, buy credits, authenticate with Atlas-issued credentials, and call Samsar video workflows without receiving the platform `SAMSAR_API_KEY`.
 
-Atlas is designed for a simple operating model: deploy one stateless container to Cloud Run, persist agent sub-account state in Firestore, publish the Agent Card, and let A2A clients invoke Samsar through a clean protocol boundary.
+Atlas is built for enterprise agent deployments:
 
-## What Atlas Provides
+- Public A2A discovery through `/.well-known/agent-card.json`
+- Self-service agent registration through credit purchase
+- Per-agent reference ids, cryptographic agent hashes, and secrets
+- Firestore-backed sub-account state, billing counters, and request accounting
+- Cloud Run deployment with Secret Manager for the Samsar platform API key
+- `samsar-js` as the only Samsar integration layer
 
-- **A2A 1.0 compatibility** through JSON-RPC and HTTP+JSON interfaces.
-- **Agent Card discovery** at `/.well-known/agent-card.json`.
-- **Samsar v2 coverage** for media generation, editing, task status, and agent-scoped billing.
-- **Atlas-managed sub-accounts** with per-agent secrets, stable cryptographic agent hashes, and billing attribution.
-- **Cloud Run deployment** with a small container footprint and no Kubernetes dependency.
-- **SDK-based integration** through `samsar-js`; Atlas does not call Samsar Processor internals directly.
+## Integration Flow
 
-## Protocol Surface
+1. Deploy Atlas to Google Cloud Run.
+2. Store `SAMSAR_API_KEY` in Google Secret Manager.
+3. Let each connecting agent call `/agents/register` with the credits it wants to buy.
+4. Return the Atlas `referenceId`, `agentSecret`, and checkout payload to that agent.
+5. After payment succeeds, the agent uses its secret to start A2A render jobs and poll task status.
 
-Atlas exposes these public endpoints:
+The `referenceId` is a stable public handle. It is not a credential. The `agentSecret` is the credential and is only returned when the agent is registered or when the secret is rotated.
+
+## Requirements
+
+- Node.js 20
+- A Samsar platform API key
+- Google Cloud project with Cloud Run, Cloud Build, Artifact Registry, Secret Manager, and Firestore
+- A user-managed Cloud Run service account with access to Secret Manager and Firestore
+
+Only `SAMSAR_API_KEY` is required from Samsar. Atlas does not require `SAMSAR_APP_KEY`, `SAMSAR_APP_SECRET`, or `SAMSAR_EXTERNAL_USER_API_KEY`.
+
+## Configuration
+
+Copy `.env.example` for local development.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `PUBLIC_BASE_URL` | Production | Public Atlas URL used in the Agent Card. Defaults to localhost for development. |
+| `SAMSAR_API_BASE_URL` | No | Samsar API base URL. Defaults to `https://api.samsar.one`. |
+| `SAMSAR_API_KEY` | Yes | Platform key used by Atlas for underlying `samsar-js` requests. |
+| `ATLAS_STATE_BACKEND` | No | `firestore` for production, `memory` for local development. |
+| `GOOGLE_CLOUD_PROJECT` | Firestore | Google Cloud project used by Firestore. Usually inferred on Cloud Run. |
+| `FIRESTORE_AGENT_COLLECTION` | No | Firestore collection for agent state. Defaults to `samsar_atlas_agents`. |
+| `ATLAS_AGENT_PROVIDER` | No | Provider name for Samsar external-user attribution. Defaults to `samsar-atlas`. |
+| `ATLAS_AGENT_SECRET_BYTES` | No | Random byte length for generated agent secrets. Defaults to `32`. |
+| `SAMSAR_REQUEST_TIMEOUT_MS` | No | Upstream request timeout. Defaults to `60000`. |
+| `JSON_BODY_LIMIT` | No | Express JSON body limit. Defaults to `25mb`. |
+| `AGENT_CARD_DOCUMENTATION_URL` | No | Documentation URL published in the Agent Card. |
+
+## Local Development
+
+```bash
+npm install
+npm run typecheck
+PUBLIC_BASE_URL=http://localhost:8080 \
+SAMSAR_API_KEY="$SAMSAR_API_KEY" \
+ATLAS_STATE_BACKEND=memory \
+npm run dev
+```
+
+The service listens on `PORT`, defaulting to `8080`.
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/.well-known/agent-card.json
+```
+
+## Deploy to Cloud Run
+
+The deployment script builds the container, pushes it to Artifact Registry, creates or updates the `samsar-api-key` secret, prepares Firestore/IAM, deploys Cloud Run, and verifies `/health`.
+
+```bash
+PROJECT_ID="your-gcp-project-id" \
+REGION="asia-southeast1" \
+SAMSAR_API_KEY="$SAMSAR_API_KEY" \
+./scripts/deploy_google_cloud_run.sh
+```
+
+For push-to-deploy, connect this GitHub repository to Cloud Build and use `cloudbuild.yaml`. The build file deploys the container to Cloud Run and reads the platform key from Secret Manager:
+
+```bash
+gcloud builds triggers create github \
+  --project "$PROJECT_ID" \
+  --name=samsar-atlas-main-deploy \
+  --repo-owner=samsarone \
+  --repo-name=Samsar-Atlas \
+  --branch-pattern='^main$' \
+  --build-config=cloudbuild.yaml \
+  --service-account="projects/$PROJECT_ID/serviceAccounts/<cloud-build-service-account-email>"
+```
+
+Google Cloud must be authorized to access the GitHub repository before the trigger can be created. If you fork the repository, replace `--repo-owner` and `--repo-name`.
+
+## Register an Agent
+
+Set the Atlas URL:
+
+```bash
+export ATLAS_URL="https://your-atlas-service.run.app"
+```
+
+Registering an agent requires a positive credit purchase. Atlas creates the agent sub-account in `pending_payment` status and returns a checkout payload.
+
+```bash
+curl -sS -X POST "$ATLAS_URL/agents/register" \
+  -H "content-type: application/json" \
+  -d '{
+    "displayName": "Marketplace Agent",
+    "email": "agent@example.com",
+    "externalAgentId": "google-marketplace-agent-123",
+    "credits": 2500
+  }'
+```
+
+The response includes:
+
+- `registration.referenceId`: stable Atlas id for the agent
+- `agent.agentHash`: cryptographic public agent hash
+- `credentials.agentSecret`: secret used to authenticate agent calls
+- `checkout`: Samsar checkout/payment payload for the credit purchase
+
+Store `credentials.agentSecret` securely. Atlas stores only its hash.
+
+## Confirm Payment
+
+After the user pays the checkout, poll payment status. Atlas activates the agent when Samsar reports a successful payment.
+
+```bash
+export ATLAS_AGENT_ID="<referenceId>"
+export ATLAS_AGENT_SECRET="<agentSecret>"
+
+curl -sS "$ATLAS_URL/agents/billing/payment-status" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET"
+```
+
+An agent must be `active` before it can start render jobs.
+
+## Buy More Credits
+
+Active agents can create another credit checkout:
+
+```bash
+curl -sS -X POST "$ATLAS_URL/agents/billing/recharge" \
+  -H "content-type: application/json" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -d '{ "credits": 2500 }'
+```
+
+## Start a Text-to-Video Render
+
+```bash
+curl -sS -X POST "$ATLAS_URL/a2a" \
+  -H "content-type: application/json" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "t2v-1",
+    "method": "SendMessage",
+    "params": {
+      "metadata": { "skill": "text_to_video" },
+      "message": {
+        "role": "ROLE_USER",
+        "messageId": "msg-t2v-1",
+        "parts": [
+          { "text": "Create a cinematic 10 second product launch video." },
+          {
+            "data": {
+              "input": {
+                "prompt": "A cinematic product launch video with smooth camera motion, premium lighting, and a clean background.",
+                "video_model": "RUNWAYML",
+                "aspect_ratio": "16:9"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }'
+```
+
+## Start an Image-List-to-Video Render
+
+```bash
+curl -sS -X POST "$ATLAS_URL/a2a" \
+  -H "content-type: application/json" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "il2v-1",
+    "method": "SendMessage",
+    "params": {
+      "metadata": { "skill": "image_list_to_video" },
+      "message": {
+        "role": "ROLE_USER",
+        "messageId": "msg-il2v-1",
+        "parts": [
+          { "text": "Create a product showcase video from these images." },
+          {
+            "data": {
+              "input": {
+                "image_urls": [
+                  "https://cdn.example.com/image-1.png",
+                  "https://cdn.example.com/image-2.png"
+                ],
+                "prompt": "A polished product showcase with smooth transitions.",
+                "video_model": "RUNWAYML",
+                "aspect_ratio": "16:9"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }'
+```
+
+`Authorization: Bearer <agentSecret>` can be used instead of `x-atlas-agent-secret`.
+
+## Poll a Task
+
+`SendMessage` returns an A2A task. Poll the returned task id until it completes:
+
+```bash
+curl -sS -X POST "$ATLAS_URL/a2a" \
+  -H "content-type: application/json" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "status-1",
+    "method": "GetTask",
+    "params": {
+      "id": "<task-id>"
+    }
+  }'
+```
+
+REST-style polling is also available:
+
+```bash
+curl -sS "$ATLAS_URL/tasks/<task-id>" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET"
+```
+
+## Protocol Reference
+
+Public endpoints:
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /.well-known/agent-card.json` | A2A Agent Card discovery. |
-| `POST /agents/register` | Start self-service registration by creating an Atlas-managed agent sub-account and credit checkout. |
-| `GET /agents/me` | Fetch the authenticated Atlas agent profile and local billing counters. |
-| `POST /agents/rotate-secret` | Rotate the authenticated Atlas agent secret. |
-| `POST /agents/billing/recharge` | Create a recharge checkout for the authenticated Atlas agent. |
-| `GET /agents/billing/payment-status` | Poll payment status for the authenticated Atlas agent. |
+| `GET /.well-known/agent.json` | Alternate Agent Card discovery route. |
+| `POST /agents/register` | Register a pending agent and create initial credit checkout. |
+| `GET /agents/me` | Fetch authenticated agent profile and billing counters. |
+| `POST /agents/rotate-secret` | Rotate authenticated agent secret. |
+| `POST /agents/billing/recharge` | Create recharge checkout for an active agent. |
+| `GET /agents/billing/payment-status` | Poll payment status and activate paid agents. |
 | `POST /a2a` | JSON-RPC A2A endpoint. |
-| `POST /message:send` | HTTP+JSON alias for sending an A2A message. |
+| `POST /message:send` | HTTP+JSON A2A send endpoint. |
 | `GET /tasks` | List visible Samsar tasks. |
 | `GET /tasks/:id` | Fetch task status. |
-| `POST /tasks/:id:cancel` | Cancel a task. |
-| `POST /tasks/:id/cancel` | Cancel alias for clients that prefer slash routes. |
-| `GET /health` | Runtime health check. |
+| `POST /tasks/:id:cancel` | Cancel task. |
+| `POST /tasks/:id/cancel` | Cancel task alias. |
+| `GET /health` | Health check. |
 
 Supported JSON-RPC methods:
 
@@ -41,13 +277,9 @@ Supported JSON-RPC methods:
 - `CancelTask`
 - `GetExtendedAgentCard`
 
-Streaming and push notifications are not advertised yet. Use `SendMessage` and poll with `GetTask`.
+Streaming and push notifications are not advertised. Use `SendMessage` and poll with `GetTask`.
 
-## Skills
-
-Atlas uses `metadata.skill` to route an A2A message to the corresponding Samsar operation.
-
-Media skills:
+Supported Atlas-managed skills:
 
 - `text_to_video`
 - `image_list_to_video`
@@ -60,284 +292,21 @@ Media skills:
 - `update_outro_image`
 - `update_footer_image`
 - `join_videos`
-
-Billing skills:
-
 - `get_credits`
 - `create_credits_recharge`
 - `get_payment_status`
 
-Synchronous skills return a completed A2A task immediately, with the Samsar response in the `samsar-response` data artifact. Long-running media skills return a task id that can be polled. Atlas injects the authenticated agent sub-account into every Samsar request; callers cannot choose another `external_user` in A2A payloads.
+Atlas injects the authenticated agent sub-account into every Samsar request. A2A callers cannot override `external_user`.
 
-## Quickstart
+## Security Model
 
-From the workspace root:
+Atlas runs as the Samsar service principal. Connecting agents authenticate to Atlas with Atlas-issued secrets. In production:
 
-```bash
-npm --prefix samsar-js install
-npm --prefix samsar-js run build
-npm --prefix Samsar-Atlas install
-SAMSAR_API_KEY="$SAMSAR_API_KEY" ATLAS_STATE_BACKEND=memory npm --prefix Samsar-Atlas run dev
-```
-
-The local service starts on `PORT`, defaulting to `8080`.
-
-```bash
-curl http://localhost:8080/health
-curl http://localhost:8080/.well-known/agent-card.json
-```
-
-## Configuration
-
-Copy `.env.example` and set:
-
-| Variable | Required | Description |
-| --- | --- | --- |
-| `PUBLIC_BASE_URL` | Yes | Public URL used in the Agent Card. |
-| `SAMSAR_API_BASE_URL` | Yes | Samsar API base URL, for example `https://api.samsar.one`. |
-| `SAMSAR_API_KEY` | Yes | Platform service API key used for all underlying `samsar-js` requests. |
-| `SAMSAR_REQUEST_TIMEOUT_MS` | No | Upstream request timeout. Defaults to `60000`. |
-| `JSON_BODY_LIMIT` | No | JSON body limit. Defaults to `25mb`. |
-| `AGENT_CARD_DOCUMENTATION_URL` | No | Documentation URL included in the Agent Card. |
-| `ATLAS_AGENT_PROVIDER` | No | Provider name used for Samsar external-user attribution. Defaults to `samsar-atlas`. |
-| `ATLAS_AGENT_SECRET_BYTES` | No | Random byte length for generated Atlas agent secrets. Defaults to `32`. |
-| `ATLAS_STATE_BACKEND` | No | `firestore` or `memory`. Defaults to `firestore` in production and `memory` otherwise. |
-| `GOOGLE_CLOUD_PROJECT` | Firestore | Google Cloud project for Firestore. Cloud Run service identity can also infer this. |
-| `FIRESTORE_DATABASE_ID` | No | Optional Firestore database id. |
-| `FIRESTORE_AGENT_COLLECTION` | No | Firestore collection for Atlas agent records. Defaults to `samsar_atlas_agents`. |
-
-Only `SAMSAR_API_KEY` is needed from Samsar. Atlas no longer accepts `SAMSAR_APP_KEY`, `SAMSAR_APP_SECRET`, or `SAMSAR_EXTERNAL_USER_API_KEY` because connecting agents authenticate to Atlas, not directly to Samsar.
-
-## Agent Registration
-
-Register each connecting agent by purchasing credits. Atlas creates a pending sub-account, creates a Samsar credit checkout for that sub-account, and returns a reference id plus a cryptographic agent secret. The agent can use the reference id for lookup, but agent calls still require the returned secret.
-
-```bash
-curl -X POST http://localhost:8080/agents/register \
-  -H 'content-type: application/json' \
-  -d '{
-    "displayName": "Marketplace Agent",
-    "email": "ops@example.com",
-    "externalAgentId": "google-marketplace-agent-123",
-    "credits": 2500
-  }'
-```
-
-The response includes `registration.referenceId`, `agent.agentHash`, `checkout.url`, and `credentials.agentSecret`. Store the secret in the connecting agent. After the checkout is paid, poll payment status:
-
-```bash
-curl "http://localhost:8080/agents/billing/payment-status" \
-  -H "x-atlas-agent-id: <referenceId>" \
-  -H "x-atlas-agent-secret: <agentSecret>"
-```
-
-When the payment status succeeds, Atlas activates the sub-account. Send future A2A requests with:
-
-```bash
-Authorization: Bearer <agentSecret>
-```
-
-or:
-
-```bash
-x-atlas-agent-secret: <agentSecret>
-```
-
-You may also include `x-atlas-agent-id: <referenceId>` to avoid a credential-hash lookup. The reference id alone is not a credential.
-
-## Example: Image List to Video
-
-Send A2A requests with the Atlas agent secret:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "video-1",
-  "method": "SendMessage",
-  "params": {
-    "metadata": {
-      "skill": "image_list_to_video"
-    },
-    "message": {
-      "role": "ROLE_USER",
-      "messageId": "msg-video-1",
-      "parts": [
-        {
-          "text": "Create a product launch ad."
-        },
-        {
-          "data": {
-            "input": {
-              "image_urls": [
-                "https://cdn.example.com/a.png",
-                "https://cdn.example.com/b.png"
-              ],
-              "video_model": "RUNWAYML",
-              "aspect_ratio": "16:9"
-            }
-          }
-        }
-      ]
-    }
-  }
-}
-```
-
-Poll the returned task:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "status-1",
-  "method": "GetTask",
-  "params": {
-    "id": "<task-id>"
-  }
-}
-```
-
-## Example: Billing
-
-This creates a checkout link for the authenticated Atlas agent sub-account:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "billing-1",
-  "method": "SendMessage",
-  "params": {
-    "metadata": {
-      "skill": "create_credits_recharge"
-    },
-    "message": {
-      "role": "ROLE_USER",
-      "messageId": "msg-billing-1",
-      "parts": [
-        {
-          "data": {
-            "input": {
-              "credits": 2500
-            }
-          }
-        }
-      ]
-    }
-  }
-}
-```
-
-## Docker
-
-Build from the workspace root so Docker can include the local `samsar-js` package:
-
-```bash
-docker build -f Samsar-Atlas/Dockerfile -t samsar-atlas .
-```
-
-Run locally:
-
-```bash
-docker run --rm -p 8080:8080 \
-  -e PUBLIC_BASE_URL=http://localhost:8080 \
-  -e SAMSAR_API_BASE_URL=https://api.samsar.one \
-  -e SAMSAR_API_KEY="$SAMSAR_API_KEY" \
-  -e ATLAS_STATE_BACKEND=memory \
-  samsar-atlas
-```
-
-## Deploy to Cloud Run
-
-From the workspace root, the local deploy script handles build, secrets, Firestore, IAM, Cloud Run deploy, and a health check:
-
-```bash
-Samsar-Atlas/scripts/deploy_google_cloud_run.sh
-```
-
-Recommended APAC region:
-
-```bash
-export PROJECT_ID="your-gcp-project-id"
-export REGION="asia-southeast1"
-export REPO="samsar-agents"
-export SERVICE="samsar-atlas"
-export SERVICE_ACCOUNT="samsar-atlas-run@$PROJECT_ID.iam.gserviceaccount.com"
-export IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$SERVICE:latest"
-```
-
-Build and push:
-
-```bash
-gcloud auth login
-gcloud config set project "$PROJECT_ID"
-gcloud auth configure-docker "$REGION-docker.pkg.dev"
-
-gcloud artifacts repositories create "$REPO" \
-  --repository-format=docker \
-  --location="$REGION" \
-  --description="Samsar Atlas container images"
-
-docker build -f Samsar-Atlas/Dockerfile -t "$IMAGE" .
-docker push "$IMAGE"
-```
-
-Create the platform API key secret and enable Firestore:
-
-```bash
-printf '%s' "$SAMSAR_API_KEY" | gcloud secrets create samsar-api-key \
-  --data-file=- \
-  --replication-policy=automatic
-
-gcloud firestore databases create \
-  --location="$REGION" \
-  --database="(default)"
-
-gcloud iam service-accounts create samsar-atlas-run \
-  --display-name="Samsar Atlas Cloud Run"
-
-gcloud secrets add-iam-policy-binding samsar-api-key \
-  --member="serviceAccount:$SERVICE_ACCOUNT" \
-  --role="roles/secretmanager.secretAccessor"
-
-gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:$SERVICE_ACCOUNT" \
-  --role="roles/datastore.user"
-```
-
-Deploy with the service identity granted access to Firestore and Secret Manager:
-
-```bash
-gcloud run deploy "$SERVICE" \
-  --image "$IMAGE" \
-  --region "$REGION" \
-  --platform managed \
-  --service-account "$SERVICE_ACCOUNT" \
-  --allow-unauthenticated \
-  --port 8080 \
-  --cpu 1 \
-  --memory 512Mi \
-  --concurrency 80 \
-  --timeout 300 \
-  --min-instances 1 \
-  --max-instances 5 \
-  --set-secrets SAMSAR_API_KEY=samsar-api-key:latest \
-  --set-env-vars PUBLIC_BASE_URL=https://placeholder,SAMSAR_API_BASE_URL=https://api.samsar.one,SAMSAR_REQUEST_TIMEOUT_MS=60000,JSON_BODY_LIMIT=25mb,ATLAS_AGENT_PROVIDER=samsar-atlas,ATLAS_STATE_BACKEND=firestore,FIRESTORE_AGENT_COLLECTION=samsar_atlas_agents
-```
-
-After deployment, update `PUBLIC_BASE_URL` to the assigned Cloud Run URL:
-
-```bash
-export SERVICE_URL="$(gcloud run services describe "$SERVICE" \
-  --region "$REGION" \
-  --format='value(status.url)')"
-
-gcloud run services update "$SERVICE" \
-  --region "$REGION" \
-  --update-env-vars PUBLIC_BASE_URL="$SERVICE_URL"
-```
-
-## Security
-
-Atlas runs as the Samsar service principal and authenticates connecting agents with Atlas-issued secrets. Store only the secret hash in Firestore; the plaintext agent secret is returned during purchase-backed registration. For production, store `SAMSAR_API_KEY` in Secret Manager, use a user-managed Cloud Run service account, and grant that service account only the Secret Manager and Firestore permissions it needs. A public reference id is useful for routing and lookup, but it must not be treated as an authentication secret.
+- Store `SAMSAR_API_KEY` in Secret Manager.
+- Run Cloud Run as a user-managed service account.
+- Grant that service account only Secret Manager access to `samsar-api-key` and Firestore access for agent state.
+- Treat `referenceId` as a public identifier, not an authentication secret.
+- Store `agentSecret` only in the connecting agent or customer-controlled secret store.
 
 ## License
 
