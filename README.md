@@ -160,6 +160,8 @@ curl -sS -X POST "$ATLAS_URL/agents/billing/recharge" \
 
 Atlas keeps the A2A video payload intentionally small. For text-to-video, send only `prompt` and `duration`; Atlas injects NanoBanana Pro for image generation, Lyria3 for music, Google TTS for speech, and `VEO3.1FAST` for video by default. If you need the non-fast model, set `video_model` to `VEO3.1`.
 
+Use a normal `-d` payload for copy-paste commands. A shell heredoc such as `<<'JSON'` does not execute until you add a final line containing exactly `JSON`.
+
 ```bash
 curl -sS -X POST "$ATLAS_URL/a2a" \
   -H "content-type: application/json" \
@@ -188,6 +190,16 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
       }
     }
   }'
+```
+
+With bearer auth, the same 10 second request is:
+
+```bash
+curl -sS -X POST "$ATLAS_URL/a2a" \
+  -H "content-type: application/json" \
+  -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
+  -H "Authorization: Bearer $ATLAS_AGENT_SECRET" \
+  -d '{"jsonrpc":"2.0","id":"t2v-10s-1","method":"SendMessage","params":{"metadata":{"skill":"text_to_video"},"message":{"role":"ROLE_USER","messageId":"msg-t2v-10s-1","parts":[{"kind":"data","data":{"input":{"prompt":"Create a cinematic product launch video for a new GPU line with premium lighting and smooth camera motion.","duration":10}}}]}}}'
 ```
 
 ## Start an Image-List-to-Video Render

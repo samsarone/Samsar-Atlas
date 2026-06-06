@@ -126,6 +126,42 @@ const ATLAS_A2A_DEFAULT_VIDEO_MODEL = "VEO3.1I2VFAST";
 const ATLAS_A2A_VIDEO_MODEL = "VEO3.1I2V";
 const ATLAS_A2A_BACKINGTRACK_MODEL = "LYRIA3";
 const ATLAS_A2A_TTS_MODEL = "GOOGLE";
+const ATLAS_A2A_GOOGLE_TTS_SPEAKER_OPTIONS: JsonObject = {
+  allowOpenAI: false,
+  allowElevenLabs: false,
+  allowGoogle: true,
+  openAISpeakers: [],
+  elevenLabsSpeakers: [],
+  googleSpeakers: ["en-US-Standard-F", "en-US-Standard-D"],
+  googleSpeakerDetails: [
+    {
+      provider: "GOOGLE",
+      value: "en-US-Standard-F",
+      voiceId: "en-US-Standard-F",
+      name: "en-US-Standard-F",
+      label: "en-US Standard F",
+      languageCode: "en-US",
+      languageCodes: ["en-US"],
+      Gender: "F",
+      gender: "female",
+      ssmlGender: "SSML_VOICE_GENDER_FEMALE",
+      previewRequiresAuth: true,
+    },
+    {
+      provider: "GOOGLE",
+      value: "en-US-Standard-D",
+      voiceId: "en-US-Standard-D",
+      name: "en-US-Standard-D",
+      label: "en-US Standard D",
+      languageCode: "en-US",
+      languageCodes: ["en-US"],
+      Gender: "M",
+      gender: "male",
+      ssmlGender: "SSML_VOICE_GENDER_MALE",
+      previewRequiresAuth: true,
+    },
+  ],
+};
 
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -174,6 +210,7 @@ function buildAtlasA2AVideoDefaults(input: JsonObject): JsonObject {
     video_model: normalizeAtlasA2AVideoModel(input),
     backingtrack_model: ATLAS_A2A_BACKINGTRACK_MODEL,
     tts_model: ATLAS_A2A_TTS_MODEL,
+    speakerOptions: ATLAS_A2A_GOOGLE_TTS_SPEAKER_OPTIONS,
   };
 }
 
