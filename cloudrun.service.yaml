@@ -7,20 +7,39 @@ spec:
     metadata:
       annotations:
         autoscaling.knative.dev/minScale: "0"
-        autoscaling.knative.dev/maxScale: "20"
+        autoscaling.knative.dev/maxScale: "1"
+        run.googleapis.com/startup-cpu-boost: "false"
     spec:
+      serviceAccountName: samsar-atlas-run@gen-lang-client-0458967376.iam.gserviceaccount.com
       containerConcurrency: 80
       timeoutSeconds: 300
       containers:
-        - image: us-docker.pkg.dev/PROJECT_ID/REPOSITORY/samsar-atlas:latest
+        - image: asia-southeast1-docker.pkg.dev/gen-lang-client-0458967376/samsar-agents/samsar-atlas:latest
           ports:
             - containerPort: 8080
           env:
             - name: PORT
               value: "8080"
             - name: PUBLIC_BASE_URL
-              value: "https://samsar-atlas.example.com"
+              value: "https://samsar-atlas-543055520808.asia-southeast1.run.app"
             - name: SAMSAR_API_BASE_URL
               value: "https://api.samsar.one"
+            - name: SAMSAR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: samsar-api-key
+                  key: latest
             - name: SAMSAR_REQUEST_TIMEOUT_MS
               value: "60000"
+            - name: JSON_BODY_LIMIT
+              value: "25mb"
+            - name: AGENT_CARD_DOCUMENTATION_URL
+              value: "https://docs.samsar.one/v2"
+            - name: ATLAS_AGENT_PROVIDER
+              value: "samsar-atlas"
+            - name: ATLAS_STATE_BACKEND
+              value: "firestore"
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "gen-lang-client-0458967376"
+            - name: FIRESTORE_AGENT_COLLECTION
+              value: "samsar_atlas_agents"

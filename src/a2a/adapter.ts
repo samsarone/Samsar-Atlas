@@ -106,6 +106,21 @@ const SYNCHRONOUS_SKILLS = new Set([
   "get_user_payment_status",
 ]);
 
+const MANAGED_SUBACCOUNT_DISABLED_SKILLS = new Set([
+  "create_external_user",
+  "create_login_token",
+  "grant_credits",
+  "create_user_recharge_credits",
+  "refresh_user_token",
+  "create_user_app_key",
+  "get_user_app_key",
+  "refresh_user_app_key",
+  "revoke_user_app_key",
+  "get_user_credits",
+  "get_user_usage_logs",
+  "get_user_payment_status",
+]);
+
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -291,10 +306,12 @@ function extractExternalUser(params: MessageSendParams, input: JsonObject): V2Ex
 }
 
 function makeOptions(baseOptions: V2RequestOptions, params: MessageSendParams, input: JsonObject): V2RequestOptions {
+  const resolvedExternalUser = baseOptions.externalUser ?? extractExternalUser(params, input);
+
   return compactObject({
     ...baseOptions,
     webhookUrl: extractWebhookUrl(params, input),
-    externalUser: extractExternalUser(params, input),
+    externalUser: resolvedExternalUser,
   });
 }
 
@@ -520,6 +537,10 @@ async function executeSkill(
   fileParts: A2AFilePart[],
   options: V2RequestOptions,
 ): Promise<SamsarResult<unknown>> {
+  if (MANAGED_SUBACCOUNT_DISABLED_SKILLS.has(skill)) {
+    throw new Error(`Skill ${skill} is not available in Atlas managed sub-account mode.`);
+  }
+
   const samsarInput = cleanSamsarInput(input);
 
   if (skill === "image_list_to_video" || skill === "step_image_to_video") {

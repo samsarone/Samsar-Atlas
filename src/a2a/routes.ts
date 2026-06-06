@@ -2,6 +2,9 @@ import type { Request, Response, Router } from "express";
 import express from "express";
 import type { SamsarClient, V2RequestOptions } from "samsar-js";
 import type { AppConfig } from "../config.js";
+import { authenticateAtlasAgent } from "../agents/auth.js";
+import { recordTaskAccounting } from "../agents/accounting.js";
+import type { AtlasAgentRecord, AtlasAgentStore } from "../agents/types.js";
 import { buildSamsarRequestOptions } from "../samsar/client.js";
 import { buildAgentCard } from "./agent-card.js";
 import { cancelTask, getTask, listTasks, sendMessage } from "./adapter.js";
@@ -10,16 +13,23 @@ import type { JsonObject, JsonRpcRequest, MessageSendParams, TaskQueryParams } f
 
 const SUPPORTED_A2A_VERSIONS = new Set(["1.0", "1.0.0"]);
 
-function mergeOptions(req: Request, overrides: Partial<V2RequestOptions> = {}): V2RequestOptions {
+function mergeOptions(req: Request, agent: AtlasAgentRecord, overrides: Partial<V2RequestOptions> = {}): V2RequestOptions {
   const baseOptions = buildSamsarRequestOptions(req);
   return {
     ...baseOptions,
+    externalUser: agent.externalUser,
     ...overrides,
     headers: {
       ...(baseOptions.headers ?? {}),
       ...(overrides.headers ?? {}),
     },
   };
+}
+
+function statusFromError(error: unknown): number {
+  return error && typeof error === "object" && "statusCode" in error && typeof error.statusCode === "number"
+    ? error.statusCode
+    : 500;
 }
 
 function firstValue(value: unknown): string | undefined {
@@ -48,26 +58,41 @@ function sendUnsupportedVersion(res: Response, version: string): Response {
   });
 }
 
-async function dispatchJsonRpc(client: SamsarClient, req: Request, rpc: JsonRpcRequest) {
-  const baseOptions = mergeOptions(req);
+async function dispatchJsonRpc(client: SamsarClient, store: AtlasAgentStore, req: Request, rpc: JsonRpcRequest) {
   const params = asParams(rpc.params);
 
   switch (rpc.method) {
-    case "SendMessage":
-      return jsonRpcSuccess(rpc.id, {
-        task: await sendMessage(client, params as unknown as MessageSendParams, baseOptions),
-      });
-    case "GetTask":
-      return jsonRpcSuccess(rpc.id, await getTask(client, params as TaskQueryParams, baseOptions));
-    case "CancelTask":
-      return jsonRpcSuccess(rpc.id, await cancelTask(client, params as TaskQueryParams, baseOptions));
-    case "ListTasks":
-      return jsonRpcSuccess(rpc.id, await listTasks(client, baseOptions));
     case "GetExtendedAgentCard":
       return jsonRpcSuccess(rpc.id, buildAgentCard(req.app.locals.config as AppConfig));
     case "SendStreamingMessage":
     case "SubscribeToTask":
       return jsonRpcError(rpc.id, -32010, `${rpc.method} is not enabled. Use SendMessage plus GetTask polling.`);
+    case "SendMessage":
+      {
+        const agent = await authenticateAtlasAgent(req, store);
+        const task = await sendMessage(client, params as unknown as MessageSendParams, mergeOptions(req, agent));
+        await recordTaskAccounting(store, agent, task, "send_message");
+        return jsonRpcSuccess(rpc.id, { task });
+      }
+    case "GetTask":
+      {
+        const agent = await authenticateAtlasAgent(req, store);
+        const task = await getTask(client, params as TaskQueryParams, mergeOptions(req, agent));
+        await recordTaskAccounting(store, agent, task, "get_task");
+        return jsonRpcSuccess(rpc.id, task);
+      }
+    case "CancelTask":
+      {
+        const agent = await authenticateAtlasAgent(req, store);
+        const task = await cancelTask(client, params as TaskQueryParams, mergeOptions(req, agent));
+        await recordTaskAccounting(store, agent, task, "cancel_task");
+        return jsonRpcSuccess(rpc.id, task);
+      }
+    case "ListTasks":
+      {
+        const agent = await authenticateAtlasAgent(req, store);
+        return jsonRpcSuccess(rpc.id, await listTasks(client, mergeOptions(req, agent)));
+      }
     default:
       return jsonRpcError(rpc.id, -32601, `Unsupported A2A method: ${rpc.method}`);
   }
@@ -78,7 +103,7 @@ function taskIdFromRequest(req: Request): string | undefined {
   return req.params.id || regexParam || (req.query.id as string | undefined);
 }
 
-export function createA2ARouter(config: AppConfig, client: SamsarClient): Router {
+export function createA2ARouter(config: AppConfig, client: SamsarClient, store: AtlasAgentStore): Router {
   const router = express.Router();
   router.use((req, _res, next) => {
     req.app.locals.config = config;
@@ -108,10 +133,10 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient): Router
     }
 
     try {
-      const response = await dispatchJsonRpc(client, req, req.body);
+      const response = await dispatchJsonRpc(client, store, req, req.body);
       return res.status("error" in response ? 400 : 200).json(response);
     } catch (error) {
-      return res.status(500).json(errorToJsonRpc(req.body.id, error));
+      return res.status(statusFromError(error)).json(errorToJsonRpc(req.body.id, error));
     }
   });
 
@@ -122,11 +147,13 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient): Router
     }
 
     try {
+      const agent = await authenticateAtlasAgent(req, store);
       const params = (req.body?.params ?? req.body) as MessageSendParams;
-      const task = await sendMessage(client, params, mergeOptions(req));
+      const task = await sendMessage(client, params, mergeOptions(req, agent));
+      await recordTaskAccounting(store, agent, task, "send_message");
       return res.status(200).type("application/a2a+json").json({ task });
     } catch (error) {
-      return res.status(500).json(errorToJsonRpc(null, error));
+      return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
     }
   }
 
@@ -139,9 +166,10 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient): Router
     }
 
     try {
-      return res.status(200).type("application/a2a+json").json(await listTasks(client, mergeOptions(req)));
+      const agent = await authenticateAtlasAgent(req, store);
+      return res.status(200).type("application/a2a+json").json(await listTasks(client, mergeOptions(req, agent)));
     } catch (error) {
-      return res.status(500).json(errorToJsonRpc(null, error));
+      return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
     }
   });
 
@@ -152,10 +180,13 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient): Router
     }
 
     try {
+      const agent = await authenticateAtlasAgent(req, store);
       const id = taskIdFromRequest(req);
-      return res.status(200).type("application/a2a+json").json(await getTask(client, { id }, mergeOptions(req)));
+      const task = await getTask(client, { id }, mergeOptions(req, agent));
+      await recordTaskAccounting(store, agent, task, "get_task");
+      return res.status(200).type("application/a2a+json").json(task);
     } catch (error) {
-      return res.status(500).json(errorToJsonRpc(null, error));
+      return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
     }
   });
 
@@ -166,10 +197,13 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient): Router
     }
 
     try {
+      const agent = await authenticateAtlasAgent(req, store);
       const id = taskIdFromRequest(req);
-      return res.status(200).type("application/a2a+json").json(await cancelTask(client, { id }, mergeOptions(req)));
+      const task = await cancelTask(client, { id }, mergeOptions(req, agent));
+      await recordTaskAccounting(store, agent, task, "cancel_task");
+      return res.status(200).type("application/a2a+json").json(task);
     } catch (error) {
-      return res.status(500).json(errorToJsonRpc(null, error));
+      return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
     }
   });
 
@@ -180,10 +214,13 @@ export function createA2ARouter(config: AppConfig, client: SamsarClient): Router
     }
 
     try {
+      const agent = await authenticateAtlasAgent(req, store);
       const id = taskIdFromRequest(req);
-      return res.status(200).type("application/a2a+json").json(await cancelTask(client, { id }, mergeOptions(req)));
+      const task = await cancelTask(client, { id }, mergeOptions(req, agent));
+      await recordTaskAccounting(store, agent, task, "cancel_task");
+      return res.status(200).type("application/a2a+json").json(task);
     } catch (error) {
-      return res.status(500).json(errorToJsonRpc(null, error));
+      return res.status(statusFromError(error)).json(errorToJsonRpc(null, error));
     }
   });
 

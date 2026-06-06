@@ -1,11 +1,14 @@
 import express from "express";
 import { loadConfig } from "./config.js";
+import { createAgentRouter } from "./agents/routes.js";
+import { createAgentStore } from "./agents/store.js";
 import { createA2ARouter } from "./a2a/routes.js";
 import { createSamsarClient } from "./samsar/client.js";
 
 const config = loadConfig();
 const app = express();
 const client = createSamsarClient(config);
+const agentStore = createAgentStore(config);
 
 app.disable("x-powered-by");
 app.use(express.json({
@@ -13,7 +16,8 @@ app.use(express.json({
   type: ["application/json", "application/a2a+json", "application/*+json"],
 }));
 
-app.use(createA2ARouter(config, client));
+app.use(createAgentRouter(config, client, agentStore));
+app.use(createA2ARouter(config, client, agentStore));
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = err instanceof Error ? err.message : "Internal server error.";
@@ -27,5 +31,6 @@ app.listen(config.port, "0.0.0.0", () => {
     port: config.port,
     samsarApiBaseUrl: config.samsarApiBaseUrl,
     publicBaseUrl: config.publicBaseUrl,
+    stateBackend: config.stateBackend,
   }));
 });

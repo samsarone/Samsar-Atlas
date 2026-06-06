@@ -1,0 +1,55 @@
+substitutions:
+  _PROJECT_ID: gen-lang-client-0458967376
+  _REGION: asia-southeast1
+  _SERVICE: samsar-atlas
+  _REPO: samsar-agents
+  _IMAGE: asia-southeast1-docker.pkg.dev/gen-lang-client-0458967376/samsar-agents/samsar-atlas:latest
+  _PUBLIC_BASE_URL: https://samsar-atlas-6sfr2y2hbq-as.a.run.app
+  _SAMSAR_API_BASE_URL: https://api.samsar.one
+  _AGENT_CARD_DOCUMENTATION_URL: https://docs.samsar.one/v2
+  _ATLAS_AGENT_PROVIDER: samsar-atlas
+  _FIRESTORE_AGENT_COLLECTION: samsar_atlas_agents
+  _SERVICE_ACCOUNT: samsar-atlas-run@gen-lang-client-0458967376.iam.gserviceaccount.com
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "1"
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --project=${_PROJECT_ID}
+      - --image=${_IMAGE}
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_SERVICE_ACCOUNT}
+      - --allow-unauthenticated
+      - --port=8080
+      - --cpu=1
+      - --memory=512Mi
+      - --concurrency=80
+      - --timeout=300
+      - --min-instances=${_MIN_INSTANCES}
+      - --max-instances=${_MAX_INSTANCES}
+      - --set-secrets=SAMSAR_API_KEY=samsar-api-key:latest
+      - --set-env-vars=PUBLIC_BASE_URL=${_PUBLIC_BASE_URL},SAMSAR_API_BASE_URL=${_SAMSAR_API_BASE_URL},SAMSAR_REQUEST_TIMEOUT_MS=60000,JSON_BODY_LIMIT=25mb,AGENT_CARD_DOCUMENTATION_URL=${_AGENT_CARD_DOCUMENTATION_URL},ATLAS_AGENT_PROVIDER=${_ATLAS_AGENT_PROVIDER},ATLAS_STATE_BACKEND=firestore,FIRESTORE_AGENT_COLLECTION=${_FIRESTORE_AGENT_COLLECTION},GOOGLE_CLOUD_PROJECT=${_PROJECT_ID}
+
+images:
+  - ${_IMAGE}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
