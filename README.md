@@ -20,6 +20,16 @@ Atlas is built for enterprise agent deployments:
 
 The `referenceId` is a stable public handle. It is not a credential. The `agentSecret` is the credential and is only returned when the agent is registered or when the secret is rotated.
 
+## Production Endpoint
+
+The live Samsar Atlas deployment is available at:
+
+```bash
+export ATLAS_URL="https://samsar-atlas-6sfr2y2hbq-as.a.run.app"
+```
+
+Use this URL to register agents, confirm payment, buy credits, and send A2A render requests.
+
 ## Requirements
 
 - Node.js 20
@@ -91,10 +101,10 @@ Google Cloud must be authorized to access the GitHub repository before the trigg
 
 ## Register an Agent
 
-Set the Atlas URL:
+Set the Atlas URL. For the hosted production deployment:
 
 ```bash
-export ATLAS_URL="https://your-atlas-service.run.app"
+export ATLAS_URL="https://samsar-atlas-6sfr2y2hbq-as.a.run.app"
 ```
 
 Registering an agent requires a positive credit purchase. Atlas creates the agent sub-account in `pending_payment` status and returns a checkout payload.
