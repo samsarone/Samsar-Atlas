@@ -126,6 +126,7 @@ const ATLAS_A2A_DEFAULT_VIDEO_MODEL = "VEO3.1I2VFAST";
 const ATLAS_A2A_VIDEO_MODEL = "VEO3.1I2V";
 const ATLAS_A2A_BACKINGTRACK_MODEL = "LYRIA3";
 const ATLAS_A2A_TTS_MODEL = "GOOGLE";
+const ATLAS_A2A_INFERENCE_MODEL = "gemini-3.1-pro";
 const ATLAS_A2A_GOOGLE_TTS_SPEAKER_OPTIONS: JsonObject = {
   allowOpenAI: false,
   allowElevenLabs: false,
@@ -210,6 +211,7 @@ function buildAtlasA2AVideoDefaults(input: JsonObject): JsonObject {
     video_model: normalizeAtlasA2AVideoModel(input),
     backingtrack_model: ATLAS_A2A_BACKINGTRACK_MODEL,
     tts_model: ATLAS_A2A_TTS_MODEL,
+    inference_model: ATLAS_A2A_INFERENCE_MODEL,
     speakerOptions: ATLAS_A2A_GOOGLE_TTS_SPEAKER_OPTIONS,
   };
 }

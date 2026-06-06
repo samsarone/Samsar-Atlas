@@ -50,7 +50,7 @@ export function buildAgentCard(config: AppConfig): AgentCard {
       {
         id: "text_to_video",
         name: "Text to Video",
-        description: "Create a Samsar video generation request from a prompt and duration. Atlas supplies the image, video, music, and TTS settings.",
+        description: "Create a Samsar video generation request from a prompt and duration. Atlas supplies the image, inference, video, music, and TTS settings.",
         tags: ["video", "generation", "text-to-video"],
         examples: ["Create a 20 second launch teaser for a travel app."],
         inputModes: ["text/plain", "application/json"],
@@ -59,7 +59,7 @@ export function buildAgentCard(config: AppConfig): AgentCard {
       {
         id: "image_list_to_video",
         name: "Image List to Video",
-        description: "Create a Samsar video generation request from ordered images, optional prompt, and optional metadata. Atlas supplies the model, music, and TTS settings.",
+        description: "Create a Samsar video generation request from ordered images, optional prompt, and optional metadata. Atlas supplies the image, inference, video, music, and TTS settings.",
         tags: ["video", "generation", "image-to-video", "storyboard"],
         examples: ["Turn these product images into a narrated ad."],
         inputModes: ["application/json", "image/png", "image/jpeg", "image/webp"],

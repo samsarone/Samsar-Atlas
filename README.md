@@ -158,7 +158,7 @@ curl -sS -X POST "$ATLAS_URL/agents/billing/recharge" \
 
 ## Start a Text-to-Video Render
 
-Atlas keeps the A2A video payload intentionally small. For text-to-video, send only `prompt` and `duration`; Atlas injects NanoBanana Pro for image generation, Lyria3 for music, Google TTS for speech, and `VEO3.1FAST` for video by default. If you need the non-fast model, set `video_model` to `VEO3.1`.
+Atlas keeps the A2A video payload intentionally small. For text-to-video, send only `prompt` and `duration`; Atlas injects NanoBanana Pro for image generation, Gemini 3.1 Pro for inference, Lyria3 for music, Google TTS for speech, and `VEO3.1FAST` for video by default. If you need the non-fast model, set `video_model` to `VEO3.1`.
 
 Use a normal `-d` payload for copy-paste commands. A shell heredoc such as `<<'JSON'` does not execute until you add a final line containing exactly `JSON`.
 
@@ -204,7 +204,7 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
 
 ## Start an Image-List-to-Video Render
 
-For image-list-to-video, send image URLs plus optional `prompt` and `metadata`. Atlas uses the same fixed NanoBanana Pro, Lyria3, Google TTS, and default `VEO3.1FAST` settings. Set `video_model` to `VEO3.1` only when you want the non-fast model.
+For image-list-to-video, send image URLs plus optional `prompt` and `metadata`. Atlas uses the same fixed NanoBanana Pro, Gemini 3.1 Pro, Lyria3, Google TTS, and default `VEO3.1FAST` settings. Set `video_model` to `VEO3.1` only when you want the non-fast model.
 
 ```bash
 curl -sS -X POST "$ATLAS_URL/a2a" \
@@ -335,6 +335,7 @@ Atlas assigns each request to the authenticated agent sub-account.
 For A2A video generation, client payloads do not need Samsar model/provider settings. Atlas enforces these project defaults internally:
 
 - Image model: NanoBanana Pro
+- Inference model: Gemini 3.1 Pro
 - Video model: `VEO3.1FAST` by default, with optional `video_model: "VEO3.1"`
 - Backing track: Lyria3
 - Text to speech: Google TTS
