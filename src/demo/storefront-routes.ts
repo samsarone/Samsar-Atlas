@@ -15,6 +15,20 @@ import type { JsonObject, JsonRpcRequest, MessageSendParams, TaskQueryParams } f
 
 const localProductVideos = new Map<string, JsonObject>();
 let firestoreClient: Firestore | undefined;
+const MAX_PROXY_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_PROXY_CACHE_BYTES = 64 * 1024 * 1024;
+const IMAGE_PROXY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const IMAGE_PROXY_RETRY_DELAYS_MS = [0, 750, 2000];
+const IMAGE_PROXY_USER_AGENT = "SamsarAtlasDemoImageProxy/1.0";
+
+type CachedProxyImage = {
+  body: Buffer;
+  contentType: string;
+  expiresAt: number;
+};
+
+const imageProxyCache = new Map<string, CachedProxyImage>();
+let imageProxyCacheBytes = 0;
 
 function isObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -45,6 +59,168 @@ function statusFromError(error: unknown): number {
 function sendRouteError(res: Response, error: unknown): Response {
   const message = error instanceof Error ? error.message : "Internal server error.";
   return res.status(statusFromError(error)).json({ message });
+}
+
+function routeError(message: string, statusCode: number): Error & { statusCode: number } {
+  const error = new Error(message) as Error & { statusCode: number };
+  error.statusCode = statusCode;
+  return error;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function getCachedProxyImage(cacheKey: string): CachedProxyImage | undefined {
+  const cached = imageProxyCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.expiresAt <= Date.now()) {
+    imageProxyCache.delete(cacheKey);
+    imageProxyCacheBytes -= cached.body.byteLength;
+    return undefined;
+  }
+  return cached;
+}
+
+function pruneProxyImageCache(): void {
+  for (const [cacheKey, cached] of imageProxyCache) {
+    if (imageProxyCacheBytes <= MAX_PROXY_CACHE_BYTES) {
+      return;
+    }
+    imageProxyCache.delete(cacheKey);
+    imageProxyCacheBytes -= cached.body.byteLength;
+  }
+}
+
+function setCachedProxyImage(cacheKey: string, image: Omit<CachedProxyImage, "expiresAt">): void {
+  const existing = imageProxyCache.get(cacheKey);
+  if (existing) {
+    imageProxyCacheBytes -= existing.body.byteLength;
+  }
+  imageProxyCache.set(cacheKey, {
+    ...image,
+    expiresAt: Date.now() + IMAGE_PROXY_CACHE_TTL_MS,
+  });
+  imageProxyCacheBytes += image.body.byteLength;
+  pruneProxyImageCache();
+}
+
+function allowedImageSource(url: URL): boolean {
+  if (url.protocol !== "https:") {
+    return false;
+  }
+
+  if (url.hostname === "commons.wikimedia.org") {
+    return (
+      url.pathname.startsWith("/wiki/Special:FilePath/") ||
+      (url.pathname === "/w/index.php" && (url.searchParams.get("title") || "").startsWith("Special:Redirect/file/"))
+    );
+  }
+
+  if (url.hostname === "upload.wikimedia.org") {
+    return url.pathname.startsWith("/wikipedia/commons/");
+  }
+
+  if (url.hostname === "images.metmuseum.org") {
+    return url.pathname.startsWith("/CRDImages/");
+  }
+
+  return false;
+}
+
+async function fetchAllowedImage(url: URL, redirectsRemaining = 4): Promise<globalThis.Response> {
+  if (!allowedImageSource(url)) {
+    throw routeError("Image source host is not allowed.", 400);
+  }
+
+  const response = await fetch(url, {
+    headers: { "user-agent": IMAGE_PROXY_USER_AGENT },
+    redirect: "manual",
+  });
+
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    if (redirectsRemaining <= 0) {
+      throw routeError("Image source redirected too many times.", 502);
+    }
+    const location = response.headers.get("location");
+    if (!location) {
+      throw routeError("Image source redirect did not include a location.", 502);
+    }
+    return fetchAllowedImage(new URL(location, url), redirectsRemaining - 1);
+  }
+
+  return response;
+}
+
+async function fetchProxyImage(sourceUrl: URL): Promise<Omit<CachedProxyImage, "expiresAt">> {
+  let lastError: Error & { statusCode: number } = routeError("Image source did not return an image.", 502);
+
+  for (const [attempt, delayMs] of IMAGE_PROXY_RETRY_DELAYS_MS.entries()) {
+    if (delayMs > 0) {
+      await wait(delayMs);
+    }
+
+    const imageResponse = await fetchAllowedImage(sourceUrl);
+    if (!imageResponse.ok) {
+      lastError = routeError(`Image source returned HTTP ${imageResponse.status}.`, 502);
+      await imageResponse.arrayBuffer().catch(() => undefined);
+      continue;
+    }
+
+    const contentType = imageResponse.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) {
+      lastError = routeError("Image source did not return an image.", 502);
+      await imageResponse.arrayBuffer().catch(() => undefined);
+      continue;
+    }
+
+    const contentLength = Number(imageResponse.headers.get("content-length") || 0);
+    if (contentLength > MAX_PROXY_IMAGE_BYTES) {
+      throw routeError("Image source is too large.", 413);
+    }
+
+    const body = Buffer.from(await imageResponse.arrayBuffer());
+    if (body.byteLength > MAX_PROXY_IMAGE_BYTES) {
+      throw routeError("Image source is too large.", 413);
+    }
+    if (body.byteLength === 0) {
+      lastError = routeError("Image source did not return an image.", 502);
+      continue;
+    }
+
+    return { body, contentType };
+  }
+
+  throw lastError;
+}
+
+async function proxyImage(req: Request, res: Response): Promise<Response | void> {
+  const source = firstValue(req.query.source);
+  if (!source) {
+    return res.status(400).json({ message: "source is required." });
+  }
+
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(source);
+  } catch {
+    return res.status(400).json({ message: "source must be a valid URL." });
+  }
+
+  const cached = getCachedProxyImage(sourceUrl.href);
+  const image = cached || (await fetchProxyImage(sourceUrl));
+  if (!cached) {
+    setCachedProxyImage(sourceUrl.href, image);
+  }
+
+  res.setHeader("cache-control", "public, max-age=604800");
+  res.setHeader("content-type", image.contentType);
+  res.setHeader("content-length", String(image.body.byteLength));
+  return res.status(200).send(image.body);
 }
 
 function safePaymentPayload(input: JsonObject): JsonObject {
@@ -346,6 +522,14 @@ export function createDemoStorefrontRouter(config: AppConfig, client: SamsarClie
           config.demoStorefrontAdminSessionSecret,
       ),
     });
+  });
+
+  router.get("/demo/storefront/image", async (req, res) => {
+    try {
+      return await proxyImage(req, res);
+    } catch (error) {
+      return sendRouteError(res, error);
+    }
   });
 
   router.post("/demo/storefront/admin/login", (req, res) => {

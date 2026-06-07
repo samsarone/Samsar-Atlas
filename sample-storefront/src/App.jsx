@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
   BadgeDollarSign,
   Boxes,
   CheckCircle2,
   CreditCard,
+  ExternalLink,
   Film,
+  Images,
   KeyRound,
   Loader2,
   LogIn,
   Play,
   Search,
   Settings,
-  ShoppingCart,
   Sparkles,
 } from "lucide-react";
 import { categories, products } from "./data/products.js";
@@ -33,6 +35,7 @@ import { isFirebaseConfigured } from "./lib/firebase.js";
 
 const TERMINAL = new Set(["completed", "failed"]);
 const SETTINGS_KEY = "atlas-market-admin-settings";
+const PRODUCT_ROUTE_PREFIX = "/products/";
 
 function formatPrice(value) {
   return new Intl.NumberFormat("en-US", {
@@ -55,6 +58,29 @@ function loadSettings() {
 
 function saveSettings(settings) {
   window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function productPath(product) {
+  return `${PRODUCT_ROUTE_PREFIX}${product.id}`;
+}
+
+function findProduct(productId) {
+  return products.find((product) => product.id === productId) || products[0];
+}
+
+function readRoute() {
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
+  const params = new URLSearchParams(window.location.search);
+
+  if (path === "/admin" || params.get("view") === "admin") {
+    return { view: "admin", productId: params.get("product") || products[0].id };
+  }
+
+  if (path.startsWith(PRODUCT_ROUTE_PREFIX)) {
+    return { view: "product", productId: decodeURIComponent(path.slice(PRODUCT_ROUTE_PREFIX.length)) };
+  }
+
+  return { view: "storefront", productId: products[0].id };
 }
 
 function statusLabel(value) {
@@ -86,7 +112,7 @@ function ProductMedia({ product, video }) {
   return <img className="product-media" src={product.images[0].url} alt={product.images[0].alt} loading="lazy" />;
 }
 
-function Storefront({ selectedProduct, setSelectedProduct, videos, query, setQuery, category, setCategory }) {
+function Storefront({ selectedProduct, setSelectedProduct, videos, query, setQuery, category, setCategory, openProduct }) {
   const visibleProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return products.filter((product) => {
@@ -125,13 +151,13 @@ function Storefront({ selectedProduct, setSelectedProduct, videos, query, setQue
           <h1>{selectedProduct.title}</h1>
           <p>{selectedProduct.description}</p>
           <div className="detail-actions">
-            <button type="button" className="primary-button">
-              <ShoppingCart size={18} />
-              Add to Cart
+            <button type="button" className="primary-button" onClick={() => openProduct(selectedProduct)}>
+              <Images size={18} />
+              View Details
             </button>
             <span className="inventory">
               <Boxes size={16} />
-              {selectedProduct.inventory} in stock
+              {selectedProduct.images.length} public-source images
             </span>
           </div>
         </div>
@@ -144,10 +170,14 @@ function Storefront({ selectedProduct, setSelectedProduct, videos, query, setQue
         {visibleProducts.map((product) => {
           const video = videos[product.id];
           return (
-            <article
+            <button
               key={product.id}
+              type="button"
               className={product.id === selectedProduct.id ? "product-card selected" : "product-card"}
-              onClick={() => setSelectedProduct(product)}
+              onClick={() => {
+                setSelectedProduct(product);
+                openProduct(product);
+              }}
             >
               <div className="product-image-wrap">
                 <img src={product.images[0].url} alt={product.images[0].alt} loading="lazy" />
@@ -170,9 +200,122 @@ function Storefront({ selectedProduct, setSelectedProduct, videos, query, setQue
                 </div>
                 <p className="small-line">{product.badge}</p>
               </div>
-            </article>
+            </button>
           );
         })}
+      </section>
+    </main>
+  );
+}
+
+function ProductDetails({ product, video, onBack, openAdmin }) {
+  const [activeImageUrl, setActiveImageUrl] = useState(product.images[0].url);
+  const activeImage = product.images.find((item) => item.url === activeImageUrl) || product.images[0];
+  const status = statusLabel(video?.status);
+
+  useEffect(() => {
+    setActiveImageUrl(product.images[0].url);
+  }, [product]);
+
+  return (
+    <main className="product-page">
+      <button type="button" className="back-button" onClick={onBack}>
+        <ArrowLeft size={17} />
+        Storefront
+      </button>
+
+      <section className="product-detail-layout">
+        <div className="gallery-panel">
+          <div className="gallery-main">
+            <img src={activeImage.url} alt={activeImage.alt} />
+          </div>
+          <div className="thumbnail-row">
+            {product.images.map((item) => (
+              <button
+                key={item.url}
+                type="button"
+                className={item.url === activeImage.url ? "thumbnail active" : "thumbnail"}
+                onClick={() => setActiveImageUrl(item.url)}
+              >
+                <img src={item.url} alt={item.alt} />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="product-info-panel">
+          <p className="eyebrow">{product.category}</p>
+          <h1>{product.title}</h1>
+          <p className="brand-line">{product.brand}</p>
+          <ProductRating product={product} />
+          <div className="price-row large">
+            <strong>{formatPrice(product.price)}</strong>
+            <span>{formatPrice(product.compareAt)}</span>
+          </div>
+          <p className="detail-description">{product.description}</p>
+          <div className="detail-metrics">
+            <span>
+              <small>SKU</small>
+              {product.sku}
+            </span>
+            <span>
+              <small>Images</small>
+              {product.images.length}
+            </span>
+            <span>
+              <small>Video</small>
+              {status}
+            </span>
+          </div>
+          <div className="feature-list">
+            {product.features.map((feature) => (
+              <span key={feature}>{feature}</span>
+            ))}
+          </div>
+          <button type="button" className="secondary-button wide" onClick={() => openAdmin(product)}>
+            <Film size={17} />
+            Open in Admin
+          </button>
+        </div>
+      </section>
+
+      <section className="detail-section">
+        <div className="section-heading">
+          <Images size={18} />
+          <h2>Image Set</h2>
+        </div>
+        <div className="detail-image-grid">
+          {product.images.map((item) => (
+            <figure key={item.url}>
+              <img src={item.url} alt={item.alt} loading="lazy" />
+              <figcaption>
+                <span>{item.alt}</span>
+                <small>{item.sourceName}</small>
+                <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink size={14} />
+                  {item.license}
+                </a>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      </section>
+
+      <section className="detail-section">
+        <div className="section-heading">
+          <Film size={18} />
+          <h2>Generated Video</h2>
+        </div>
+        {video?.videoUrl ? (
+          <div className="video-detail-frame">
+            <video src={video.videoUrl} poster={video.posterUrl || product.images[0].url} controls />
+          </div>
+        ) : (
+          <div className="video-placeholder">
+            <Play size={30} />
+            <span>{status}</span>
+          </div>
+        )}
       </section>
     </main>
   );
@@ -567,34 +710,73 @@ function Admin({ selectedProduct, setSelectedProduct, videos }) {
 }
 
 export default function App() {
-  const [view, setView] = useState("storefront");
-  const [selectedProduct, setSelectedProduct] = useState(products[0]);
+  const [route, setRoute] = useState(readRoute);
+  const [selectedProduct, setSelectedProduct] = useState(() => findProduct(readRoute().productId));
   const [videos, setVideos] = useState({});
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
 
   useEffect(() => subscribeProductVideos(setVideos), []);
 
+  useEffect(() => {
+    const handlePopState = () => setRoute(readRoute());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    setSelectedProduct(findProduct(route.productId));
+  }, [route]);
+
+  function navigate(path, nextProduct = selectedProduct) {
+    window.history.pushState({}, "", path);
+    setSelectedProduct(nextProduct);
+    setRoute(readRoute());
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function openStorefront() {
+    navigate("/", selectedProduct);
+  }
+
+  function openProduct(product) {
+    navigate(productPath(product), product);
+  }
+
+  function openAdmin(product = selectedProduct) {
+    navigate(`/admin?product=${encodeURIComponent(product.id)}`, product);
+  }
+
+  const activeProduct = route.view === "product" ? findProduct(route.productId) : selectedProduct;
+  const storefrontActive = route.view === "storefront" || route.view === "product";
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <button type="button" className="brand" onClick={() => setView("storefront")}>
+        <button type="button" className="brand" onClick={openStorefront}>
           <span className="brand-mark">A</span>
           <span>Atlas Market</span>
         </button>
         <nav>
-          <button type="button" className={view === "storefront" ? "nav-button active" : "nav-button"} onClick={() => setView("storefront")}>
-            <ShoppingCart size={17} />
+          <button type="button" className={storefrontActive ? "nav-button active" : "nav-button"} onClick={openStorefront}>
+            <Boxes size={17} />
             Storefront
           </button>
-          <button type="button" className={view === "admin" ? "nav-button active" : "nav-button"} onClick={() => setView("admin")}>
+          <button type="button" className={route.view === "admin" ? "nav-button active" : "nav-button"} onClick={() => openAdmin(activeProduct)}>
             <Settings size={17} />
             Admin
           </button>
         </nav>
       </header>
 
-      {view === "storefront" ? (
+      {route.view === "product" ? (
+        <ProductDetails
+          product={activeProduct}
+          video={videos[activeProduct.id]}
+          onBack={openStorefront}
+          openAdmin={openAdmin}
+        />
+      ) : route.view === "storefront" ? (
         <Storefront
           selectedProduct={selectedProduct}
           setSelectedProduct={setSelectedProduct}
@@ -603,9 +785,10 @@ export default function App() {
           setQuery={setQuery}
           category={category}
           setCategory={setCategory}
+          openProduct={openProduct}
         />
       ) : (
-        <Admin selectedProduct={selectedProduct} setSelectedProduct={setSelectedProduct} videos={videos} />
+        <Admin selectedProduct={activeProduct} setSelectedProduct={setSelectedProduct} videos={videos} />
       )}
     </div>
   );

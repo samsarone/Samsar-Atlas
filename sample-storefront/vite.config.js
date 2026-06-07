@@ -20,6 +20,10 @@ export default defineConfig({
         target: atlasProxyTarget,
         changeOrigin: true,
       },
+      "/demo": {
+        target: atlasProxyTarget,
+        changeOrigin: true,
+      },
       "/.well-known": {
         target: atlasProxyTarget,
         changeOrigin: true,

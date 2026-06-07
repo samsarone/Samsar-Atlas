@@ -56,6 +56,10 @@ function a2aUrl(settings) {
   return useDemoProxy(settings) ? demoProxyUrl(settings, "/a2a") : atlasUrl(settings, "/a2a");
 }
 
+function absoluteImageUrl(image) {
+  return new URL(image.url, window.location.origin).href;
+}
+
 export function defaultAtlasSettings() {
   return {
     baseUrl: DEFAULT_ATLAS_BASE_URL,
@@ -83,6 +87,7 @@ export function buildProductVideoPrompt(product, customPrompt = "") {
 
 export function buildImageListToVideoRpc(product, prompt, settings) {
   const id = rpcId(`storefront-${product.id}`);
+  const imageUrls = product.images.map(absoluteImageUrl);
   return {
     jsonrpc: "2.0",
     id,
@@ -101,7 +106,7 @@ export function buildImageListToVideoRpc(product, prompt, settings) {
             kind: "data",
             data: {
               input: {
-                image_urls: product.images.map((image) => image.url),
+                image_urls: imageUrls,
                 prompt,
                 metadata: {
                   product_id: product.id,
