@@ -362,7 +362,7 @@ if [[ "$DEPLOY_SAMPLE_STOREFRONT" == "true" ]]; then
   if ! firebase_cmd projects:addfirebase "$PROJECT_ID" --project "$PROJECT_ID" --non-interactive >/dev/null 2>&1; then
     echo "Firebase project setup was skipped or failed. Continuing only if the project is already Firebase-enabled." >&2
   fi
-  if ! firebase_cmd hosting:sites:list --project "$PROJECT_ID" --json | node -e "let input=''; process.stdin.on('data', c => input += c); process.stdin.on('end', () => { const body = JSON.parse(input || '{}'); const sites = body.result || body.sites || []; process.exit(sites.some((site) => site.siteId === process.argv[1]) ? 0 : 1); });" "$FIREBASE_HOSTING_SITE_ID"; then
+  if ! firebase_cmd hosting:sites:list --project "$PROJECT_ID" --json | node -e "let input=''; process.stdin.on('data', c => input += c); process.stdin.on('end', () => { const body = JSON.parse(input || '{}'); const result = body.result || {}; const sites = Array.isArray(result) ? result : (result.sites || body.sites || []); process.exit(sites.some((site) => site.siteId === process.argv[1]) ? 0 : 1); });" "$FIREBASE_HOSTING_SITE_ID"; then
     echo "Creating Firebase Hosting site: $FIREBASE_HOSTING_SITE_ID"
     firebase_cmd hosting:sites:create "$FIREBASE_HOSTING_SITE_ID" \
       --project "$PROJECT_ID" \
