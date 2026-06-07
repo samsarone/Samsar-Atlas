@@ -363,6 +363,7 @@ if [[ "$DEPLOY_SAMPLE_STOREFRONT" == "true" ]]; then
   (
     cd "$ATLAS_DIR/sample-storefront"
     trap 'rm -f .env.production' EXIT
+    export npm_config_cache="${npm_config_cache:-$PWD/.npm-cache}"
     cat > .env.production <<EOF
 VITE_ATLAS_BASE_URL=
 VITE_DEMO_PROXY_BASE_URL=/demo/storefront
