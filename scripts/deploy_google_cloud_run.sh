@@ -88,6 +88,7 @@ DEMO_STOREFRONT_INITIAL_CREDITS="${DEMO_STOREFRONT_INITIAL_CREDITS:-100}"
 DEMO_STOREFRONT_ADMIN_PASSWORD_SECRET="${DEMO_STOREFRONT_ADMIN_PASSWORD_SECRET:-demo-storefront-admin-password}"
 DEMO_STOREFRONT_ADMIN_SESSION_SECRET_NAME="${DEMO_STOREFRONT_ADMIN_SESSION_SECRET_NAME:-demo-storefront-admin-session-secret}"
 DEMO_STOREFRONT_AGENT_SECRET_NAME="${DEMO_STOREFRONT_AGENT_SECRET_NAME:-demo-storefront-agent-secret}"
+FIREBASE_HOSTING_SITE_ID="${FIREBASE_HOSTING_SITE_ID:-$PROJECT_ID}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   echo "PROJECT_ID is required or gcloud config project must be set." >&2
@@ -358,11 +359,18 @@ firebase_cmd() {
 
 if [[ "$DEPLOY_SAMPLE_STOREFRONT" == "true" ]]; then
   echo "Deploying sample storefront to Firebase Hosting project=$PROJECT_ID"
-  firebase_cmd projects:addfirebase "$PROJECT_ID" --project "$PROJECT_ID" >/dev/null 2>&1 || true
-  firebase_cmd hosting:sites:create "$PROJECT_ID" --project "$PROJECT_ID" >/dev/null 2>&1 || true
+  if ! firebase_cmd projects:addfirebase "$PROJECT_ID" --project "$PROJECT_ID" --non-interactive >/dev/null 2>&1; then
+    echo "Firebase project setup was skipped or failed. Continuing only if the project is already Firebase-enabled." >&2
+  fi
+  if ! firebase_cmd hosting:sites:list --project "$PROJECT_ID" --json | node -e "let input=''; process.stdin.on('data', c => input += c); process.stdin.on('end', () => { const body = JSON.parse(input || '{}'); const sites = body.result || body.sites || []; process.exit(sites.some((site) => site.siteId === process.argv[1]) ? 0 : 1); });" "$FIREBASE_HOSTING_SITE_ID"; then
+    echo "Creating Firebase Hosting site: $FIREBASE_HOSTING_SITE_ID"
+    firebase_cmd hosting:sites:create "$FIREBASE_HOSTING_SITE_ID" \
+      --project "$PROJECT_ID" \
+      --non-interactive
+  fi
   (
     cd "$ATLAS_DIR/sample-storefront"
-    trap 'rm -f .env.production' EXIT
+    trap 'rm -f .env.production firebase.deploy.json' EXIT
     export npm_config_cache="${npm_config_cache:-$PWD/.npm-cache}"
     cat > .env.production <<EOF
 VITE_ATLAS_BASE_URL=
@@ -370,13 +378,14 @@ VITE_DEMO_PROXY_BASE_URL=/demo/storefront
 VITE_USE_DEMO_PROXY=true
 VITE_USE_FIREBASE_CLIENT_STATE=false
 EOF
+    FIREBASE_HOSTING_SITE_ID="$FIREBASE_HOSTING_SITE_ID" node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('firebase.json', 'utf8')); if (Array.isArray(config.hosting)) { config.hosting = config.hosting.map((item) => ({ ...item, site: process.env.FIREBASE_HOSTING_SITE_ID })); } else { config.hosting = { ...config.hosting, site: process.env.FIREBASE_HOSTING_SITE_ID }; } fs.writeFileSync('firebase.deploy.json', JSON.stringify(config, null, 2));"
     if [[ -f package-lock.json ]]; then
       npm ci
     else
       npm install
     fi
     npm run build
-    firebase_cmd deploy --project "$PROJECT_ID" --only hosting,firestore:rules
+    firebase_cmd deploy --config firebase.deploy.json --project "$PROJECT_ID" --only hosting,firestore:rules
   )
 fi
 
