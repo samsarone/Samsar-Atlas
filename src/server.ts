@@ -3,6 +3,7 @@ import { loadConfig } from "./config.js";
 import { createAgentRouter } from "./agents/routes.js";
 import { createAgentStore } from "./agents/store.js";
 import { createA2ARouter } from "./a2a/routes.js";
+import { createDemoStorefrontRouter } from "./demo/storefront-routes.js";
 import { createSamsarClient } from "./samsar/client.js";
 
 const config = loadConfig();
@@ -17,6 +18,7 @@ app.use(express.json({
 }));
 
 app.use(createAgentRouter(config, client, agentStore));
+app.use(createDemoStorefrontRouter(config, client, agentStore));
 app.use(createA2ARouter(config, client, agentStore));
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -32,5 +34,6 @@ app.listen(config.port, "0.0.0.0", () => {
     samsarApiBaseUrl: config.samsarApiBaseUrl,
     publicBaseUrl: config.publicBaseUrl,
     stateBackend: config.stateBackend,
+    demoStorefrontProxyEnabled: config.demoStorefrontProxyEnabled,
   }));
 });

@@ -12,6 +12,14 @@ export interface AppConfig {
   firestoreProjectId?: string;
   firestoreDatabaseId?: string;
   firestoreAgentCollection: string;
+  demoStorefrontProxyEnabled: boolean;
+  demoStorefrontAgentId?: string;
+  demoStorefrontAgentSecret?: string;
+  demoStorefrontAdminUsername?: string;
+  demoStorefrontAdminPassword?: string;
+  demoStorefrontAdminSessionSecret?: string;
+  demoStorefrontVideoCollection: string;
+  demoStorefrontAdminSessionTtlSeconds: number;
 }
 
 function optionalString(value: string | undefined): string | undefined {
@@ -31,6 +39,14 @@ function readPositiveInteger(value: string | undefined, fallback: number): numbe
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function readBoolean(value: string | undefined, fallback = false): boolean {
+  const normalized = optionalString(value)?.toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(normalized);
 }
 
 export function loadConfig(): AppConfig {
@@ -68,5 +84,17 @@ export function loadConfig(): AppConfig {
     firestoreProjectId: optionalString(process.env.GOOGLE_CLOUD_PROJECT) || optionalString(process.env.GCLOUD_PROJECT),
     firestoreDatabaseId: optionalString(process.env.FIRESTORE_DATABASE_ID),
     firestoreAgentCollection: optionalString(process.env.FIRESTORE_AGENT_COLLECTION) || "samsar_atlas_agents",
+    demoStorefrontProxyEnabled: readBoolean(process.env.DEMO_STOREFRONT_PROXY_ENABLED),
+    demoStorefrontAgentId: optionalString(process.env.DEMO_STOREFRONT_AGENT_ID),
+    demoStorefrontAgentSecret: optionalString(process.env.DEMO_STOREFRONT_AGENT_SECRET),
+    demoStorefrontAdminUsername: optionalString(process.env.DEMO_STOREFRONT_ADMIN_USERNAME),
+    demoStorefrontAdminPassword: optionalString(process.env.DEMO_STOREFRONT_ADMIN_PASSWORD),
+    demoStorefrontAdminSessionSecret: optionalString(process.env.DEMO_STOREFRONT_ADMIN_SESSION_SECRET),
+    demoStorefrontVideoCollection:
+      optionalString(process.env.DEMO_STOREFRONT_VIDEO_COLLECTION) || "atlas_demo_product_videos",
+    demoStorefrontAdminSessionTtlSeconds: readPositiveInteger(
+      process.env.DEMO_STOREFRONT_ADMIN_SESSION_TTL_SECONDS,
+      60 * 60 * 12,
+    ),
   };
 }

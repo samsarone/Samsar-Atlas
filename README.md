@@ -20,12 +20,12 @@ Atlas is built for enterprise agent deployments:
 
 The `referenceId` is a stable public handle. It is not a credential. The `agentSecret` is the credential and is only returned when the agent is registered or when the secret is rotated.
 
-## Production Endpoint
+## Hosted Endpoint
 
-The live Samsar Atlas deployment is available at:
+After deployment, use the Cloud Run URL printed by the deployment script:
 
 ```bash
-export ATLAS_URL="https://samsar-atlas-6sfr2y2hbq-as.a.run.app"
+export ATLAS_URL="https://your-samsar-atlas-service-url"
 ```
 
 Use this URL to register agents, confirm payment, buy credits, and send A2A render requests.
@@ -51,6 +51,13 @@ Copy `.env.example` for local development.
 | `FIRESTORE_AGENT_COLLECTION` | No | Firestore collection for agent state. Defaults to `samsar_atlas_agents`. |
 | `ATLAS_AGENT_PROVIDER` | No | Provider name for Samsar external-user attribution. Defaults to `samsar-atlas`. |
 | `ATLAS_AGENT_SECRET_BYTES` | No | Random byte length for generated agent secrets. Defaults to `32`. |
+| `DEMO_STOREFRONT_PROXY_ENABLED` | No | Enables the secure proxy used by the Firebase sample storefront. Defaults to `true` in the deploy script. |
+| `DEMO_STOREFRONT_AGENT_ID` | Sample | Hosted demo agent id used by the storefront proxy. The deploy script bootstraps this when omitted. |
+| `DEMO_STOREFRONT_AGENT_SECRET` | Sample secret | Hosted demo agent secret. Store in Secret Manager, not in Firebase/Vite env. |
+| `DEMO_STOREFRONT_ADMIN_USERNAME` | Sample | Admin username for the sample storefront. Defaults to `admin`. |
+| `DEMO_STOREFRONT_ADMIN_PASSWORD` | Sample secret | Admin password for the sample storefront. The deploy script generates/stores this in Secret Manager when omitted. |
+| `DEMO_STOREFRONT_ADMIN_SESSION_SECRET` | Sample secret | HMAC signing key for short-lived sample admin sessions. Generated/stored by the deploy script when omitted. |
+| `DEMO_STOREFRONT_VIDEO_COLLECTION` | No | Firestore collection for sample product video state. Defaults to `atlas_demo_product_videos`. |
 | `SAMSAR_REQUEST_TIMEOUT_MS` | No | Upstream request timeout. Defaults to `60000`. |
 | `JSON_BODY_LIMIT` | No | Express JSON body limit. Defaults to `25mb`. |
 | `AGENT_CARD_DOCUMENTATION_URL` | No | Documentation URL published in the Agent Card. |
@@ -73,9 +80,10 @@ curl http://localhost:8080/health
 curl http://localhost:8080/.well-known/agent-card.json
 ```
 
-## Deploy to Cloud Run
+## Deploy to Cloud Run and Firebase
 
 The deployment script builds the container, pushes it to Artifact Registry, creates or updates the `samsar-api-key` secret, prepares Firestore/IAM, deploys Cloud Run, and verifies `/health`.
+By default it also deploys the sample Firebase storefront, provisions secure demo admin credentials in Secret Manager, and bootstraps the hosted demo Atlas agent when one is not already configured.
 
 ```bash
 PROJECT_ID="your-gcp-project-id" \
@@ -84,7 +92,16 @@ SAMSAR_API_KEY="$SAMSAR_API_KEY" \
 ./scripts/deploy_google_cloud_run.sh
 ```
 
-For push-to-deploy, connect this GitHub repository to Cloud Build and use `cloudbuild.yaml`. The build file deploys the container to Cloud Run and reads the backend Samsar key from Secret Manager:
+You can also set `ENV_FILE=/path/to/.env.production` when the production `SAMSAR_API_KEY` and overrides are stored in a file.
+By default the script fetches `origin` and deploys a clean archive of the latest remote default branch, falling back to `origin/main` or `origin/master`.
+Set `DEPLOY_GIT_REF=origin/main` or `DEPLOY_GIT_REF=origin/master` to pin the remote branch; set `DEPLOY_FROM_GIT=false` only when intentionally deploying the current local checkout.
+Set `DEPLOY_SAMPLE_STOREFRONT=false` to deploy only the Atlas A2A server.
+The storefront admin username and Secret Manager lookup command are printed at the end of the script.
+The password is stored in Secret Manager as `demo-storefront-admin-password`; the hosted demo agent secret is stored separately as `demo-storefront-agent-secret` and is never embedded into the Firebase bundle.
+
+`cloudbuild.yaml` intentionally only builds and pushes the container image. It does not contain production project ids, service URLs, service accounts, or secret names.
+For full Atlas plus Firebase deployment from CI, run `scripts/deploy_google_cloud_run.sh` from a protected job with `PROJECT_ID` and `SAMSAR_API_KEY` injected as CI secrets.
+For an image-only Cloud Build trigger:
 
 ```bash
 gcloud builds triggers create github \
@@ -94,6 +111,7 @@ gcloud builds triggers create github \
   --repo-name=Samsar-Atlas \
   --branch-pattern='^main$' \
   --build-config=cloudbuild.yaml \
+  --substitutions="_IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/samsar-agents/samsar-atlas:latest" \
   --service-account="projects/$PROJECT_ID/serviceAccounts/<cloud-build-service-account-email>"
 ```
 
@@ -101,10 +119,10 @@ Google Cloud must be authorized to access the GitHub repository before the trigg
 
 ## Register an Agent
 
-Set the Atlas URL. For the hosted production deployment:
+Set the Atlas URL from the deployment output:
 
 ```bash
-export ATLAS_URL="https://samsar-atlas-6sfr2y2hbq-as.a.run.app"
+export ATLAS_URL="https://your-samsar-atlas-service-url"
 ```
 
 Registering an agent requires a positive credit purchase. Atlas creates the agent sub-account in `pending_payment` status and returns a checkout payload.
@@ -158,15 +176,13 @@ curl -sS -X POST "$ATLAS_URL/agents/billing/recharge" \
 
 ## Start a Text-to-Video Render
 
-Atlas keeps the A2A video payload intentionally small. For text-to-video, send only `prompt` and `duration`; Atlas injects NanoBanana Pro for image generation, Gemini 3.1 Pro for inference, Lyria3 for music, Google TTS for speech, and `VEO3.1FAST` for video by default. If you need the non-fast model, set `video_model` to `VEO3.1`.
-
-Use a normal `-d` payload for copy-paste commands. A shell heredoc such as `<<'JSON'` does not execute until you add a final line containing exactly `JSON`.
+For text-to-video, send `prompt` and `duration`. Optional fields include `video_model`, `generate_outro_image`, `cta_url`, `cta_text_top`, and `cta_text_bottom`.
 
 ```bash
 curl -sS -X POST "$ATLAS_URL/a2a" \
   -H "content-type: application/json" \
   -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
-  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -H "Authorization: Bearer $ATLAS_AGENT_SECRET" \
   -d '{
     "jsonrpc": "2.0",
     "id": "t2v-1",
@@ -177,12 +193,16 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
         "role": "ROLE_USER",
         "messageId": "msg-t2v-1",
         "parts": [
-          { "text": "Create a cinematic 10 second product launch video." },
           {
+            "kind": "data",
             "data": {
               "input": {
                 "prompt": "A cinematic product launch video with smooth camera motion, premium lighting, and a clean background.",
-                "duration": 10
+                "duration": 10,
+                "generate_outro_image": true,
+                "cta_url": "https://app.samsar.one",
+                "cta_text_top": "CREATE YOUR NEXT VIDEO",
+                "cta_text_bottom": "Start rendering with Samsar"
               }
             }
           }
@@ -192,7 +212,7 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
   }'
 ```
 
-With bearer auth, the same 10 second request is:
+Minimal copy-paste version:
 
 ```bash
 curl -sS -X POST "$ATLAS_URL/a2a" \
@@ -204,13 +224,13 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
 
 ## Start an Image-List-to-Video Render
 
-For image-list-to-video, send image URLs plus optional `prompt` and `metadata`. Atlas uses the same fixed NanoBanana Pro, Gemini 3.1 Pro, Lyria3, Google TTS, and default `VEO3.1FAST` settings. Set `video_model` to `VEO3.1` only when you want the non-fast model.
+For image-list-to-video, send `image_urls`. Optional fields include `prompt`, `metadata`, `video_model`, `generate_outro_image`, `cta_url`, `cta_text_top`, and `cta_text_bottom`.
 
 ```bash
 curl -sS -X POST "$ATLAS_URL/a2a" \
   -H "content-type: application/json" \
   -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
-  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -H "Authorization: Bearer $ATLAS_AGENT_SECRET" \
   -d '{
     "jsonrpc": "2.0",
     "id": "il2v-1",
@@ -221,8 +241,8 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
         "role": "ROLE_USER",
         "messageId": "msg-il2v-1",
         "parts": [
-          { "text": "Create a product showcase video from these images." },
           {
+            "kind": "data",
             "data": {
               "input": {
                 "image_urls": [
@@ -233,7 +253,11 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
                 "metadata": {
                   "campaign": "spring-launch",
                   "style": "premium product showcase"
-                }
+                },
+                "generate_outro_image": true,
+                "cta_url": "https://app.samsar.one",
+                "cta_text_top": "EXPLORE THE COLLECTION",
+                "cta_text_bottom": "Built with Samsar"
               }
             }
           }
@@ -243,7 +267,7 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
   }'
 ```
 
-`Authorization: Bearer <agentSecret>` can be used instead of `x-atlas-agent-secret`.
+Use `video_model: "VEO3.1"` only when you need the non-fast render path. The default is optimized for faster generation.
 
 ## Poll a Task
 
@@ -253,7 +277,7 @@ curl -sS -X POST "$ATLAS_URL/a2a" \
 curl -sS -X POST "$ATLAS_URL/a2a" \
   -H "content-type: application/json" \
   -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
-  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET" \
+  -H "Authorization: Bearer $ATLAS_AGENT_SECRET" \
   -d '{
     "jsonrpc": "2.0",
     "id": "status-1",
@@ -269,7 +293,7 @@ REST-style polling is also available:
 ```bash
 curl -sS "$ATLAS_URL/tasks/<task-id>" \
   -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
-  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET"
+  -H "Authorization: Bearer $ATLAS_AGENT_SECRET"
 ```
 
 Atlas stores submitted task ids, Samsar request ids, and Samsar session ids in the authenticated agent's state record. `GetTask`, REST task polling, and cancel requests can use any of those ids. To list the tasks Atlas has recorded for the current agent:
@@ -277,7 +301,7 @@ Atlas stores submitted task ids, Samsar request ids, and Samsar session ids in t
 ```bash
 curl -sS "$ATLAS_URL/tasks?limit=25" \
   -H "x-atlas-agent-id: $ATLAS_AGENT_ID" \
-  -H "x-atlas-agent-secret: $ATLAS_AGENT_SECRET"
+  -H "Authorization: Bearer $ATLAS_AGENT_SECRET"
 ```
 
 The initial submit response may show `creditsCharged: 0` while the render is queued. Poll the task to see the latest Samsar status and any final charge metadata returned by Samsar.
@@ -349,6 +373,7 @@ Atlas uses one backend Samsar credential and issues separate Atlas credentials t
 - Grant that service account only Secret Manager access to `samsar-api-key` and Firestore access for agent state.
 - Treat `referenceId` as a public identifier, not an authentication secret.
 - Store `agentSecret` only in the connecting agent or customer-controlled secret store.
+- For the Firebase sample storefront, keep the hosted demo `agentSecret` and admin password in Secret Manager. The static client only receives a short-lived admin session token after login and can only render through `/demo/storefront/*`.
 
 ## License
 
