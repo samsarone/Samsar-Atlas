@@ -352,7 +352,7 @@ firebase_cmd() {
   elif command -v firebase >/dev/null 2>&1; then
     firebase "$@"
   else
-    npx --yes firebase-tools@latest "$@"
+    npm_config_cache="${FIREBASE_NPM_CACHE:-$ATLAS_DIR/.npm-cache}" npx --yes firebase-tools@latest "$@"
   fi
 }
 

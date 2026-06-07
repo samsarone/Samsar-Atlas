@@ -23,6 +23,7 @@ pnpm-debug.log*
 # Runtime and cache files
 .cache/
 .npm/
+.npm-cache/
 .eslintcache
 *.tsbuildinfo
 
