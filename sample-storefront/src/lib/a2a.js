@@ -60,6 +60,29 @@ function absoluteImageUrl(image) {
   return new URL(image.url, window.location.origin).href;
 }
 
+function absoluteUrl(value) {
+  return new URL(value, window.location.origin).href;
+}
+
+function productStorefrontUrl(product) {
+  return absoluteUrl(`/products/${product.id}`);
+}
+
+function productImageInput(product, image, index) {
+  const title = `${product.title} view ${index + 1}`;
+  return {
+    image_url: absoluteImageUrl(image),
+    title,
+    label: title,
+    image_title: title,
+    image_alt: image.alt,
+    source_name: image.sourceName,
+    source_url: image.sourceUrl,
+    product_id: product.id,
+    sku: product.sku,
+  };
+}
+
 export function defaultAtlasSettings() {
   return {
     baseUrl: DEFAULT_ATLAS_BASE_URL,
@@ -69,7 +92,8 @@ export function defaultAtlasSettings() {
     agentSecret: import.meta.env.VITE_ATLAS_AGENT_SECRET || "",
     credits: 100,
     email: "",
-    videoModel: "VEO3.1FAST",
+    videoModel: "VEO3.1I2VFAST",
+    aspectRatio: "16:9",
   };
 }
 
@@ -87,7 +111,23 @@ export function buildProductVideoPrompt(product, customPrompt = "") {
 
 export function buildImageListToVideoRpc(product, prompt, settings) {
   const id = rpcId(`storefront-${product.id}`);
-  const imageUrls = product.images.map(absoluteImageUrl);
+  const imageInputs = product.images.map((image, index) => productImageInput(product, image, index));
+  const includeOutro = product.outroEnabled === true;
+  const outroImageUrl =
+    includeOutro && typeof product.outroImageUrl === "string" && product.outroImageUrl.trim()
+      ? absoluteUrl(product.outroImageUrl.trim())
+      : "";
+  const ctaUrl =
+    includeOutro && typeof product.outroCtaUrl === "string" && product.outroCtaUrl.trim()
+      ? absoluteUrl(product.outroCtaUrl.trim())
+      : productStorefrontUrl(product);
+  const outroTopText =
+    (includeOutro && typeof product.outroTextTop === "string" && product.outroTextTop.trim()) ||
+    product.title.toUpperCase();
+  const outroBottomText =
+    (includeOutro && typeof product.outroTextBottom === "string" && product.outroTextBottom.trim()) ||
+    "Shop the Atlas Market demo";
+
   return {
     jsonrpc: "2.0",
     id,
@@ -106,7 +146,7 @@ export function buildImageListToVideoRpc(product, prompt, settings) {
             kind: "data",
             data: {
               input: {
-                image_urls: imageUrls,
+                image_urls: imageInputs,
                 prompt,
                 metadata: {
                   product_id: product.id,
@@ -118,10 +158,17 @@ export function buildImageListToVideoRpc(product, prompt, settings) {
                   features: product.features,
                 },
                 video_model: settings.videoModel,
-                generate_outro_image: true,
-                cta_url: window.location.origin,
-                cta_text_top: product.title.toUpperCase(),
-                cta_text_bottom: "Shop the Atlas Market demo",
+                aspect_ratio: settings.aspectRatio || "16:9",
+                ...(product.addNarratorAvatar === true ? { add_narrator_avatar: true } : {}),
+                ...(includeOutro
+                  ? {
+                      cta_url: ctaUrl,
+                      generate_outro_image: !outroImageUrl,
+                      ...(outroImageUrl ? { outro_image_url: outroImageUrl } : {}),
+                      cta_text_top: outroTopText,
+                      cta_text_bottom: outroBottomText,
+                    }
+                  : {}),
               },
             },
           },
@@ -131,8 +178,8 @@ export function buildImageListToVideoRpc(product, prompt, settings) {
   };
 }
 
-export async function sendImageListToVideo(product, prompt, settings) {
-  const request = buildImageListToVideoRpc(product, prompt, settings);
+export async function sendImageListToVideo(product, prompt, settings, requestOverride) {
+  const request = requestOverride || buildImageListToVideoRpc(product, prompt, settings);
   const response = await fetch(a2aUrl(settings), {
     method: "POST",
     headers: requestHeaders(settings),
@@ -330,6 +377,10 @@ function rawSamsarPayload(task) {
   return artifact?.parts?.find((part) => part.data)?.data || {};
 }
 
+function firstObject(...values) {
+  return values.find((value) => value && typeof value === "object" && !Array.isArray(value)) || null;
+}
+
 export function extractVideoResult(task) {
   const resultArtifact = task?.artifacts?.find((item) => item.name === "result-video");
   const artifactUrl = resultArtifact?.parts?.find((part) => part.url)?.url;
@@ -362,6 +413,70 @@ export function extractVideoResult(task) {
           ? payload.duration
           : undefined,
   };
+}
+
+export function extractGenerationProgress(task) {
+  const payload = rawSamsarPayload(task);
+  return firstObject(
+    payload.expressGenerationStatus,
+    payload.express_generation_status,
+    payload.generationStatus,
+    payload.generation_status,
+    payload.statusDetail,
+    payload.status_detail,
+    payload.statusDetails,
+    payload.status_details,
+    payload.session?.expressGenerationStatus,
+    payload.session?.express_generation_status,
+  );
+}
+
+function isVideoUrl(value) {
+  return typeof value === "string" && /\.(mp4|webm|mov)(\?|#|$)/i.test(value);
+}
+
+function isGeneratedOutroLayer(layer) {
+  const items = Array.isArray(layer?.image?.items) ? layer.image.items : [];
+  return Boolean(
+    layer?.isGeneratedOutroLayer ||
+      layer?.generatedOutroTilesPending ||
+      layer?.image?.url?.includes("/video/outro/") ||
+      layer?.preview?.url?.includes("/video/outro/") ||
+      items.some((item) => item?.isGeneratedOutroTile || String(item?.image || "").includes("server_generated_outro")),
+  );
+}
+
+export function extractLayerPreviews(task) {
+  const payload = rawSamsarPayload(task);
+  const layers = Array.isArray(payload.session?.layers) ? payload.session.layers : [];
+
+  return layers
+    .map((layer, index) => {
+      const items = Array.isArray(layer?.image?.items) ? layer.image.items : [];
+      const primaryItem = items.find((item) => item?.isPrimary || item?.is_base_image) || items[0];
+      const url = firstString(
+        layer?.preview?.url,
+        layer?.aiVideo?.url,
+        layer?.aiVideo?.videoUrl,
+        layer?.aiVideo?.video_url,
+        layer?.userVideo?.url,
+        layer?.video?.url,
+        layer?.image?.url,
+        primaryItem?.url,
+      );
+      if (!url) return null;
+
+      const type = layer?.preview?.type === "video" || isVideoUrl(url) ? "video" : "image";
+      return {
+        index,
+        url,
+        type,
+        label: isGeneratedOutroLayer(layer) ? `Layer ${index + 1}: outro` : `Layer ${index + 1}`,
+        isOutro: isGeneratedOutroLayer(layer),
+        stage: layer?.preview?.stage || layer?.status || "",
+      };
+    })
+    .filter(Boolean);
 }
 
 export function taskStatus(task) {
